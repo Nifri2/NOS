@@ -72,7 +72,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 
 					if calculatedChecksum == checksumByte {
 						// Valid packet
-						// fmt.Printf("Rx: Cmd=%x Eye=%x Mouth=%x\n", cmdByte, eyeByte, mouthByte)
+						fmt.Printf("Rx: Cmd=%x Eye=%x Mouth=%x\n", cmdByte, eyeByte, mouthByte)
 
 						if Address(addrByte) == config.Address {
 							cmd := Command(cmdByte)
@@ -138,8 +138,8 @@ func displayAnimation(animChan chan animUpdate) {
 	mouthAnim := findAnim("mouth_idle")
 
 	// we need to use GPIO far away from UART pins to avoid chatter
-	// we use GP2 for eye and GP16 for mouth
-	ledPin1 := machine.GP2
+	// we use GP18 for eye and GP16 for mouth
+	ledPin1 := machine.GP18
 	ledPin1.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	strip1 := ws2812.New(ledPin1)
 
@@ -147,8 +147,12 @@ func displayAnimation(animChan chan animUpdate) {
 	ledPin2.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	strip2 := ws2812.New(ledPin2)
 
+	// Boop Sensor will be connected on GP15
+
 	var currentEyeAnim *Animation
 	var currentMouthAnim *Animation
+	var queuedEyeAnim *Animation = nil
+	var queuedMouthAnim *Animation = nil
 
 	// Initial setup for currentEyeAnim
 	if eyeIdleAnim == nil {
@@ -175,15 +179,11 @@ func displayAnimation(animChan chan animUpdate) {
 		// Check for new animation command
 		select {
 		case update := <-animChan:
-			if update.Eye != nil && update.Eye != currentEyeAnim {
-				fmt.Printf("Switching Eye to: %s\n", update.Eye.Name)
-				currentEyeAnim = update.Eye
-				eyeFrameCounter = 0
+			if update.Eye != nil {
+				queuedEyeAnim = update.Eye
 			}
-			if update.Mouth != nil && update.Mouth != currentMouthAnim {
-				fmt.Printf("Switching Mouth to: %s\n", update.Mouth.Name)
-				currentMouthAnim = update.Mouth
-				mouthFrameCounter = 0
+			if update.Mouth != nil {
+				queuedMouthAnim = update.Mouth
 			}
 		default:
 		}
@@ -210,6 +210,25 @@ func displayAnimation(animChan chan animUpdate) {
 
 		eyeFrameCounter++
 		mouthFrameCounter++
+
+		// Transition at end of cycle
+		if queuedEyeAnim != nil && currentEyeAnim != nil && eyeFrameCounter > 0 && (eyeFrameCounter%int64(currentEyeAnim.FrameCount) == 0) {
+			if queuedEyeAnim != currentEyeAnim {
+				fmt.Printf("Transitioning Eye to: %s\n", queuedEyeAnim.Name)
+				currentEyeAnim = queuedEyeAnim
+				eyeFrameCounter = 0
+			}
+			queuedEyeAnim = nil
+		}
+
+		if queuedMouthAnim != nil && currentMouthAnim != nil && mouthFrameCounter > 0 && (mouthFrameCounter%int64(currentMouthAnim.FrameCount) == 0) {
+			if queuedMouthAnim != currentMouthAnim {
+				fmt.Printf("Transitioning Mouth to: %s\n", queuedMouthAnim.Name)
+				currentMouthAnim = queuedMouthAnim
+				mouthFrameCounter = 0
+			}
+			queuedMouthAnim = nil
+		}
 
 		// Yield to allow other goroutines (like UART) to run if needed
 		time.Sleep(10 * time.Millisecond)

@@ -40,6 +40,8 @@ func main() {
 
 	var uart *machine.UART = machine.UART0
 
+	// correct baud: 38400
+	// keep it 38400 otherwise the WS2812 timing gets messed up
 	uart.Configure(machine.UARTConfig{
 		BaudRate: 38400,
 		TX:       machine.GP0,
