@@ -27,6 +27,18 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 	// Radio Channel
 	radioChan := make(chan byte, 10)
+	
+	// UART Output Channel to ensure atomic packet writes
+	uartChan := make(chan [6]byte, 20)
+
+	// UART Writer Goroutine
+	go func() {
+		for packet := range uartChan {
+			uart.Write(packet[:])
+			// Log TX for debugging
+			println("TX -> Addr:", packet[1], "Cmd:", packet[2])
+		}
+	}()
 
 	// Radio handling goroutine
 	go runRadioLogic(radioChan)
@@ -34,7 +46,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Current State
 	var currentMode byte = 0x00
 
-	// Helper to send UART packet
+	// Helper to send UART packet via channel
 	sendPacket := func(addr Address, cmd Command, eye, mouth AnimationID) {
 		header := byte(0xAA)
 		a := byte(addr)
@@ -43,16 +55,24 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		m := byte(mouth)
 		checksum := a + c + e + m
 		
-		uart.WriteByte(header)
-		uart.WriteByte(a)
-		uart.WriteByte(c)
-		uart.WriteByte(e)
-		uart.WriteByte(m)
-		uart.WriteByte(checksum)
-		
-		// Simple log
-		// println("TX ->", a)
+		select {
+		case uartChan <- [6]byte{header, a, c, e, m, checksum}:
+		default:
+			println("UART Queue Full!")
+		}
 	}
+
+	// Keepalive Goroutine
+	go func() {
+		allWorkers := []Address{Worker_0, Worker_1, Worker_2, Worker_3}
+		for {
+			time.Sleep(1 * time.Second)
+			for _, w := range allWorkers {
+				// Send NoOp as keepalive
+				sendPacket(w, Cmd_NoOp, Anim_EyeIdle, Anim_MouthIdle)
+			}
+		}
+	}()
 
 	// Helper for interruptible sleep
 	// Returns (newMode, true) if interrupted

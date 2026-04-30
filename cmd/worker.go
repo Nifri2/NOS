@@ -143,7 +143,7 @@ func displayAnimation(animChan chan animUpdate) {
 	ledPin1.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	strip1 := ws2812.New(ledPin1)
 
-	ledPin2 := machine.GP16
+	ledPin2 := machine.GP12
 	ledPin2.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	strip2 := ws2812.New(ledPin2)
 
