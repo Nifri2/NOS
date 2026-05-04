@@ -1,0 +1,3 @@
+[submodule "compiler"]
+	path = compiler
+	url = https://github.com/Nifri2/visor-3d-compiler

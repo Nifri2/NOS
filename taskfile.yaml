@@ -95,3 +95,7 @@ tasks:
   monitor:
     cmds:
       - tinygo monitor
+    
+  compile_anims:
+    cmds:
+      - echo hi
