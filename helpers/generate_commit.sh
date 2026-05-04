@@ -1,30 +1,31 @@
 #!/bin/bash
 # Generate a commit message using Claude, commit, and push
 
-set -e
+# Don't exit on profile errors
+set -o pipefail
 
 # Check for uncommitted changes
-if git diff --quiet && git diff --cached --quiet; then
+if git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; then
     echo "No changes to commit"
     exit 0
 fi
 
 # Stage all changes
 echo "Staging changes..."
-git add -A
+git add -A 2>/dev/null
 
 # Get the diff for context
-DIFF=$(git diff --cached --stat)
+DIFF=$(git diff --cached --stat 2>/dev/null)
 echo "Changes to commit:"
 echo "$DIFF"
 echo ""
 
-# Generate commit message using Claude
+# Generate commit message using Claude (haiku for speed and cost)
 echo "Generating commit message..."
-COMMIT_MSG=$(claude -p "Generate a concise git commit message for these changes. Output ONLY the commit message, nothing else. No quotes, no explanation, just the message itself (can be multiple lines for body).
+COMMIT_MSG=$(claude -p "Generate a concise git commit message for these changes. Output ONLY the commit message, nothing else. No quotes, no explanation, just the message itself (can be multiple lines for body). Use Conventional Commits.
 
 Changes:
-$DIFF" --output-format text 2>/dev/null)
+$DIFF" --model haiku --output-format text 2>/dev/null)
 
 if [ -z "$COMMIT_MSG" ]; then
     echo "Failed to generate commit message"
@@ -41,10 +42,10 @@ echo ""
 echo "Committing..."
 git commit -m "$COMMIT_MSG
 
-Auto-Generated: Claude <noreply@anthropic.com>"
+Auto-Generated: Claude <noreply@anthropic.com>" 2>/dev/null
 
 # Push to origin
 echo "Pushing to origin..."
-git push
+git push 2>/dev/null
 
 echo "Done! ^w^"
