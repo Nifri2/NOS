@@ -116,4 +116,4 @@ tasks:
   generate_commit:
     desc: "Generate commit message with Claude, commit and push"
     cmds:
-      - ./helpers/generate_commit.sh
+      - bash ./helpers/generate_commit.sh

@@ -42,7 +42,7 @@ echo ""
 echo "Committing..."
 git commit -m "$COMMIT_MSG
 
-Auto-Generated: Claude <noreply@anthropic.com>" 2>/dev/null
+Commit Auto-Generated: Claude <noreply@anthropic.com>" 2>/dev/null
 
 # Push to origin
 echo "Pushing to origin..."
