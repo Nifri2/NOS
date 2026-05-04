@@ -19,7 +19,7 @@ animations:
     source: eye_idle.anim
     type: eye
     embed: true
-    rotation: 0
+    rotation: 90
     mirror_x: false
     mirror_y: false
     matrix_width: 16
@@ -31,7 +31,7 @@ animations:
     source: eye_blink.anim
     type: eye
     embed: true
-    rotation: 0
+    rotation: 90
     mirror_x: false
     mirror_y: false
     matrix_width: 16
@@ -60,7 +60,7 @@ animations:
     source: mouth_idle.anim
     type: mouth
     embed: true
-    rotation: 0
+    rotation: 180
     mirror_x: true
     mirror_y: false
     matrix_width: 32

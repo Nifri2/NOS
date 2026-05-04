@@ -117,3 +117,8 @@ tasks:
     desc: "Generate commit message with Claude, commit and push"
     cmds:
       - bash ./helpers/generate_commit.sh
+
+  push_submodule:
+    desc: "Commit and push compiler submodule changes, checkout main"
+    cmds:
+      - bash ./helpers/push_submodule.sh
