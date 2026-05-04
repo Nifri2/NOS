@@ -112,3 +112,8 @@ tasks:
     cmds:
       - task: compile_anims
       - task: generate_embeds
+
+  generate_commit:
+    desc: "Generate commit message with Claude, commit and push"
+    cmds:
+      - ./helpers/generate_commit.sh

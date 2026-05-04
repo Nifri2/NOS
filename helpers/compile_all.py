@@ -27,6 +27,8 @@ def compile_animation(anim_config: dict) -> bool:
     matrix_width = anim_config.get("matrix_width", 16)
     matrix_height = anim_config.get("matrix_height", 16)
     brightness = anim_config.get("brightness", 1.0)
+    mirror_x = anim_config.get("mirror_x", False)
+    mirror_y = anim_config.get("mirror_y", False)
 
     source_path = os.path.join(SOURCE_ANIMS_DIR, source)
 
@@ -47,8 +49,22 @@ def compile_animation(anim_config: dict) -> bool:
         "--pack",
     ]
 
+    if mirror_x:
+        cmd.append("--mirror_x")
+    if mirror_y:
+        cmd.append("--mirror_y")
+
+    mirror_str = ""
+    if mirror_x or mirror_y:
+        mirrors = []
+        if mirror_x:
+            mirrors.append("x")
+        if mirror_y:
+            mirrors.append("y")
+        mirror_str = f", mirror={'+'.join(mirrors)}"
+
     print(f"  Compiling {source} -> {name}.animbyte")
-    print(f"    rotation={rotation}, matrix={matrix_width}x{matrix_height}, brightness={brightness}")
+    print(f"    rotation={rotation}, matrix={matrix_width}x{matrix_height}, brightness={brightness}{mirror_str}")
 
     result = subprocess.run(cmd, cwd=COMPILER_DIR, capture_output=True, text=True)
 
@@ -112,7 +128,7 @@ def main():
             fail_count += 1
         print()
 
-    print(f"Done! {success_count} succeeded, {fail_count} failed")
+    print(f"Done! ^w^ {success_count} succeeded, {fail_count} failed")
 
     if fail_count > 0:
         sys.exit(1)

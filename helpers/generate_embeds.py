@@ -304,7 +304,7 @@ def main():
     success = update_structs_go(all_animations) and success
 
     if success:
-        print("\nDone!")
+        print("\nDone ^.^")
     else:
         sys.exit(1)
 

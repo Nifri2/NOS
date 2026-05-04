@@ -51,6 +51,8 @@ animations:
     type: eye              # Frame dimensions: "eye" or "mouth"
     embed: true            # Include in firmware (false for logical animations)
     rotation: 0            # 0, 90, 180, or 270 degrees
+    mirror_x: false        # Horizontal flip (left-right)
+    mirror_y: false        # Vertical flip (top-bottom)
     matrix_width: 16       # LED matrix width
     matrix_height: 16      # LED matrix height
     brightness: 0.2        # 0.0 to 1.0
@@ -72,7 +74,7 @@ There are two types of animations:
 
 ### Side Mapping (Left/Right Workers)
 
-For animations that need different rotations per side (e.g., mouth panels), use logical animations with side variants:
+For animations that need mirroring per side (e.g., mouth panels), use logical animations with side variants:
 
 ```yaml
 # Actual animations (embedded, with side-specific settings)
@@ -82,7 +84,7 @@ For animations that need different rotations per side (e.g., mouth panels), use 
   side: left              # Worker_0 uses this
   source: mouth_idle.anim
   embed: true
-  rotation: 0
+  mirror_x: false         # Original orientation
   ...
 
 - name: mouth_idle_right
@@ -91,7 +93,7 @@ For animations that need different rotations per side (e.g., mouth panels), use 
   side: right             # Worker_1 uses this
   source: mouth_idle.anim
   embed: true
-  rotation: 180           # Rotated for the other side
+  mirror_x: true          # Mirrored for the other side
   ...
 
 # Logical animation (protocol ID only, not embedded)

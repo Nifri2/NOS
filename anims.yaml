@@ -8,6 +8,9 @@
 #
 # logical_id: If set, this animation is a variant of the logical animation
 # side: left | right - which worker uses this variant (Worker_0=left, Worker_1=right)
+#
+# mirror_x: true - horizontal flip (left-right)
+# mirror_y: true - vertical flip (top-bottom)
 
 animations:
   # === Eye animations ===
@@ -17,6 +20,8 @@ animations:
     type: eye
     embed: true
     rotation: 0
+    mirror_x: false
+    mirror_y: false
     matrix_width: 16
     matrix_height: 16
     brightness: 0.2
@@ -27,6 +32,8 @@ animations:
     type: eye
     embed: true
     rotation: 0
+    mirror_x: false
+    mirror_y: false
     matrix_width: 16
     matrix_height: 16
     brightness: 0.2
@@ -40,6 +47,8 @@ animations:
     type: mouth
     embed: true
     rotation: 0
+    mirror_x: false
+    mirror_y: false
     matrix_width: 32
     matrix_height: 16
     brightness: 0.2
@@ -51,7 +60,9 @@ animations:
     source: mouth_idle.anim
     type: mouth
     embed: true
-    rotation: 180
+    rotation: 0
+    mirror_x: true
+    mirror_y: false
     matrix_width: 32
     matrix_height: 16
     brightness: 0.2
