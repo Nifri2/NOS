@@ -40,7 +40,7 @@ fi
 echo "Committing: $COMMIT_MSG"
 git commit -m "$COMMIT_MSG
 
-Commit Auto-Generated: Claude <noreply@anthropic.com>" 2>/dev/null
+Commit Auto-Generated" 2>/dev/null
 
 echo "Pushing submodule..."
 git push 2>/dev/null
