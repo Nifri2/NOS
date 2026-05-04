@@ -1,5 +1,7 @@
 # NOS
 
+![](assets/NOS.png)
+
 **N**itrous **O**xide / **N**ibble**OS** - Firmware for Nibble the protogen.
 
 ## Requirements
