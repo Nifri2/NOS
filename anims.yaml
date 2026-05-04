@@ -1,18 +1,18 @@
 # Animation compilation configuration
 # Each entry compiles source animation with specified settings
 # Output files: <name>.animbyte -> animations/
+#
+# id: Protocol ID - must be unique
+#     Embedded animations (embed: true) must have sequential IDs starting from 0
+#     Logical animations (embed: false) can have any ID (used for side mapping)
+#
+# logical_id: If set, this animation is a variant of the logical animation
+# side: left | right - which worker uses this variant (Worker_0=left, Worker_1=right)
 
 animations:
-  - name: eye_blink
-    source: eye_blink.anim
-    type: eye
-    embed: true
-    rotation: 0
-    matrix_width: 16
-    matrix_height: 16
-    brightness: 0.2
-
+  # === Eye animations ===
   - name: eye_idle
+    id: 0x00
     source: eye_idle.anim
     type: eye
     embed: true
@@ -21,7 +21,21 @@ animations:
     matrix_height: 16
     brightness: 0.2
 
+  - name: eye_blink
+    id: 0x01
+    source: eye_blink.anim
+    type: eye
+    embed: true
+    rotation: 0
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  # === Mouth animations (with left/right variants) ===
   - name: mouth_idle_left
+    id: 0x02
+    logical_id: 0x10
+    side: left
     source: mouth_idle.anim
     type: mouth
     embed: true
@@ -31,6 +45,9 @@ animations:
     brightness: 0.2
 
   - name: mouth_idle_right
+    id: 0x03
+    logical_id: 0x10
+    side: right
     source: mouth_idle.anim
     type: mouth
     embed: true
@@ -38,3 +55,8 @@ animations:
     matrix_width: 32
     matrix_height: 16
     brightness: 0.2
+
+  # === Logical animations (for protocol, not embedded) ===
+  - name: mouth_idle
+    id: 0x10
+    embed: false

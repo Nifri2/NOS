@@ -84,8 +84,8 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 							case Cmd_NoOp:
 								// NoOp
 							case Cmd_DisplayAnim:
-								eyeIdx := int(eyeByte)
-								mouthIdx := int(mouthByte)
+								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
+								mouthIdx := MapAnimation(config.Address, AnimationID(mouthByte))
 								var update animUpdate
 
 								if eyeIdx >= 0 && eyeIdx < len(LoadedAnimations) {

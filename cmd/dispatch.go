@@ -27,7 +27,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 	// Radio Channel
 	radioChan := make(chan byte, 10)
-	
+
 	// UART Output Channel to ensure atomic packet writes
 	uartChan := make(chan [6]byte, 20)
 
@@ -54,7 +54,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		e := byte(eye)
 		m := byte(mouth)
 		checksum := a + c + e + m
-		
+
 		select {
 		case uartChan <- [6]byte{header, a, c, e, m, checksum}:
 		default:
@@ -103,9 +103,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		switch currentMode {
 		case 0x00: // Standard Idle (Workers 0 & 1)
 			// println("Mode: Standard")
-			
+
 			workers := []Address{Worker_0, Worker_1}
-			
+
 			// 1. Random Sleep
 			sleepTime := 2000 + r.Intn(4001)
 			if m, changed := sleepWithInterrupt(sleepTime); changed {
@@ -133,17 +133,18 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		case 0x10: // Insignia Spinny (Worker 2)
 			// println("Mode: Insignia")
-			
+
 			// Ensure animation is set
-			sendPacket(Worker_2, Cmd_DisplayAnim, Anim_SpinnyLambda, Anim_MouthIdle)
-			
+			// sendPacket(Worker_2, Cmd_DisplayAnim, Anim_SpinnyLambda, Anim_MouthIdle)
+			sendPacket(Worker_2, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
+
 			// Just wait and check for interrupt
 			if m, changed := sleepWithInterrupt(500); changed {
 				currentMode = m
 				println("Mode Change ->", m)
 				continue
 			}
-			
+
 		default:
 			println("Unknown Mode, resetting to 0x00")
 			currentMode = 0x00

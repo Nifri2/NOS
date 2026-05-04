@@ -10,11 +10,11 @@ import (
 )
 
 // EMBED_START
-//go:embed animations/eye_blink.animbyte
-var eyeBlinkData []byte
-
 //go:embed animations/eye_idle.animbyte
 var eyeIdleData []byte
+
+//go:embed animations/eye_blink.animbyte
+var eyeBlinkData []byte
 
 //go:embed animations/mouth_idle_left.animbyte
 var mouthIdleLeftData []byte
@@ -53,14 +53,14 @@ func main() {
 
 	// Load animations
 // LOAD_START
-	eyeBlinkAnim, err := cmd.LoadAnimation(eyeBlinkData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_blink")
-	if err != nil {
-		fmt.Println("Error loading eye_blink:", err)
-	}
-
 	eyeIdleAnim, err := cmd.LoadAnimation(eyeIdleData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_idle")
 	if err != nil {
 		fmt.Println("Error loading eye_idle:", err)
+	}
+
+	eyeBlinkAnim, err := cmd.LoadAnimation(eyeBlinkData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_blink")
+	if err != nil {
+		fmt.Println("Error loading eye_blink:", err)
 	}
 
 	mouthIdleLeftAnim, err := cmd.LoadAnimation(mouthIdleLeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_idle_left")
@@ -78,11 +78,11 @@ func main() {
 	// Populate global array in cmd package
 // APPEND_START
 	cmd.LoadedAnimations = nil
-	if eyeBlinkAnim != nil {
-		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeBlinkAnim)
-	}
 	if eyeIdleAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeIdleAnim)
+	}
+	if eyeBlinkAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeBlinkAnim)
 	}
 	if mouthIdleLeftAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthIdleLeftAnim)

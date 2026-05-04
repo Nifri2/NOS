@@ -84,10 +84,13 @@ def main():
     with open(ANIMS_YAML, "r") as f:
         config = yaml.safe_load(f)
 
-    animations = config.get("animations", [])
+    all_animations = config.get("animations", [])
+
+    # Filter to only animations that need compilation (embed: true)
+    animations = [a for a in all_animations if a.get("embed", False)]
 
     if not animations:
-        print("No animations defined in anims.yaml")
+        print("No animations to compile (none with embed: true)")
         sys.exit(0)
 
     # Ensure output directories exist

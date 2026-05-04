@@ -28,13 +28,38 @@ const (
 
 type AnimationID int
 
+// ANIMID_START
 const (
-	Anim_EyeIdle      AnimationID = 0x00 + iota
-	Anim_EyeBlink                 // 0x01
-	Anim_MouthIdle                // 0x02
-	Anim_Nifri                    // 0x03
-	Anim_SpinnyLambda             // 0x04
+	Anim_EyeIdle AnimationID = 0x00
+	Anim_EyeBlink AnimationID = 0x01
+	Anim_MouthIdleLeft AnimationID = 0x02
+	Anim_MouthIdleRight AnimationID = 0x03
+	Anim_MouthIdle AnimationID = 0x10
 )
+
+// ANIMID_END
+
+// MAPPING_START
+var animationMapping = map[Address]map[AnimationID]AnimationID{
+	Worker_0: { // Left side
+		Anim_MouthIdle: Anim_MouthIdleLeft,
+	},
+	Worker_1: { // Right side
+		Anim_MouthIdle: Anim_MouthIdleRight,
+	},
+}
+
+// MapAnimation translates logical animation IDs to side-specific variants
+func MapAnimation(addr Address, id AnimationID) int {
+	if mapping, ok := animationMapping[addr]; ok {
+		if mapped, ok := mapping[id]; ok {
+			return int(mapped)
+		}
+	}
+	return int(id)
+}
+
+// MAPPING_END
 
 // Complete Protocol Packet:
 // [Header(0xAA), Address, Command, AnimID_Eye, AnimID_Mouth, Checksum]
