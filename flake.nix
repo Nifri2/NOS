@@ -1,5 +1,4 @@
-
-# This flake works buy simply using go get <package> to fetch dependencies.
+# This flake works by simply using go get <package> to fetch dependencies.
 # It uses vendor/ for dependencies, so you can run `go mod vendor` to populate it.
 # Or run `task mod` to automatically fetch dependencies and populate the vendor directory.
 
@@ -10,66 +9,87 @@
 #   nix run
 
 {
-  description = "Basic Go Project with Nix Flake";
+  description = "NOS - Protogen :3";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
+  inputs.flake-utils.url = "github:numtide/flake-utils";
 
-  outputs = { self, nixpkgs }:
-    let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-    in
-    {
-      # Merge all packages under one attribute set to expose gopls
-      packages.${system} = {
-        default = pkgs.buildGoModule {
-          pname = "put-name-here";  # Set the name of your package
-          version = "0.0.1";
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
 
-          src = pkgs.lib.cleanSource ./.;
+        pythonEnv = pkgs.python3.withPackages (ps: with ps; [
+          pyyaml
+          pillow
+          numpy
+          rich
+        ]);
 
-          env.CGO_ENABLED = 1;  # Disable CGO for Static Compilation
+      in {
+        packages = {
+          default = pkgs.buildGoModule {
+            pname = "put-name-here";  # Set the name of your package
+            version = "0.0.1";
 
-          ldflags = [
-            "-s" "-w" "-extldflags '-static'"
-          ];  # Strip Binary and Disable Debug Information, static linking
+            src = pkgs.lib.cleanSource ./.;
 
-          vendorHash = null;  # Null if you don't have a vendor directory
+            env.CGO_ENABLED = 1;
 
-          buildInputs = [
-            pkgs.musl
-            pkgs.go
-            pkgs.gopls
-            pkgs.gotools
-            pkgs.go-tools
-            pkgs.golangci-lint
-            pkgs.tinygo
-            pkgs.picotool
-          ];
+            ldflags = [
+              "-s" "-w" "-extldflags '-static'"
+            ];  # Strip Binary and Disable Debug Information, static linking
+
+            vendorHash = null;  # Null if you don't have a vendor directory
+
+            buildInputs = [
+              pkgs.musl
+              pkgs.go
+              pkgs.gopls
+              pkgs.gotools
+              pkgs.go-tools
+              pkgs.golangci-lint
+              pkgs.tinygo
+              pkgs.picotool
+            ];
+          };
+
+          gopls = pkgs.gopls;
         };
 
-        # Expose gopls directly for scripts to use
-        gopls = pkgs.gopls;
-      };
+        devShells.default = pkgs.mkShell {
+          nativeBuildInputs = [
+            # Go tooling
+            pkgs.go
+            pkgs.go-task
+            pkgs.gopls
+            pkgs.golangci-lint
+            pkgs.gotools
+            pkgs.go-tools
+            pkgs.musl
+            pkgs.tinygo
+            pkgs.picotool
 
-      devShells.${system}.default = pkgs.mkShell {
-        nativeBuildInputs = [
-          pkgs.go
-          pkgs.go-task
-          pkgs.gopls
-          pkgs.golangci-lint
-          pkgs.gotools
-          pkgs.go-tools
-          pkgs.musl
-          pkgs.tinygo
-          pkgs.picotool
-        ];
+            # Python/Micropython tooling (from compiler)
+            pkgs.python3
+            pkgs.micropython
+            pkgs.rshell
+            pkgs.mpy-utils
+            pkgs.adafruit-ampy
+            pkgs.picocom
+          ];
 
-        shellHook = ''
-          if [ "$SHELL" = "$(which fish)" ]; then
-            source .dev-fish-setup.fish
-          fi
-        ''; # Optional: Fish shell setup script
-      };
-    };
+          buildInputs = [
+            pythonEnv
+            pkgs.libclang
+          ];
+
+          shellHook = ''
+            if [ "$SHELL" = "$(which fish)" ]; then
+              source .dev-fish-setup.fish
+            fi
+          '';
+        };
+      }
+    );
 }

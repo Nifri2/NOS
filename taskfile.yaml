@@ -93,9 +93,11 @@ tasks:
         vars: {ROLE: worker, ADDRESS: worker-3}
 
   monitor:
+    desc: "Attach Monitor to connected pi"
     cmds:
       - tinygo monitor
     
   compile_anims:
+    desc: "Compile all Animations using the settings of anims.yaml"
     cmds:
-      - echo hi
+      - python helpers/compile_all.py

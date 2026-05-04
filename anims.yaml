@@ -1,0 +1,32 @@
+# Animation compilation configuration
+# Each entry compiles source animation with specified settings
+# Output files: <name>.animbyte -> animations/
+
+animations:
+  - name: eye_blink
+    source: eye_blink.anim
+    rotation: 0
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: eye_idle
+    source: eye_idle.anim
+    rotation: 0
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_idle_left
+    source: mouth_idle.anim
+    rotation: 0
+    matrix_width: 32
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_idle_right
+    source: mouth_idle.anim
+    rotation: 180
+    matrix_width: 32
+    matrix_height: 16
+    brightness: 0.2
