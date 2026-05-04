@@ -98,6 +98,17 @@ tasks:
       - tinygo monitor
     
   compile_anims:
-    desc: "Compile all Animations using the settings of anims.yaml"
+    desc: "Compile all animations using the settings in anims.yaml"
     cmds:
       - python helpers/compile_all.py
+
+  generate_embeds:
+    desc: "Update main.go with embed directives from anims.yaml"
+    cmds:
+      - python helpers/generate_embeds.py
+
+  update_anims:
+    desc: "Compile animations and update main.go embeds"
+    cmds:
+      - task: compile_anims
+      - task: generate_embeds

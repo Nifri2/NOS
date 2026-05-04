@@ -5,6 +5,8 @@
 animations:
   - name: eye_blink
     source: eye_blink.anim
+    type: eye
+    embed: true
     rotation: 0
     matrix_width: 16
     matrix_height: 16
@@ -12,6 +14,8 @@ animations:
 
   - name: eye_idle
     source: eye_idle.anim
+    type: eye
+    embed: true
     rotation: 0
     matrix_width: 16
     matrix_height: 16
@@ -19,6 +23,8 @@ animations:
 
   - name: mouth_idle_left
     source: mouth_idle.anim
+    type: mouth
+    embed: true
     rotation: 0
     matrix_width: 32
     matrix_height: 16
@@ -26,6 +32,8 @@ animations:
 
   - name: mouth_idle_right
     source: mouth_idle.anim
+    type: mouth
+    embed: true
     rotation: 180
     matrix_width: 32
     matrix_height: 16

@@ -9,20 +9,20 @@ import (
 	"nifri2/proto-dispatch/cmd"
 )
 
+// EMBED_START
 //go:embed animations/eye_blink.animbyte
 var eyeBlinkData []byte
 
 //go:embed animations/eye_idle.animbyte
 var eyeIdleData []byte
 
-//go:embed animations/mouth_idle.animbyte
-var mouthIdleData []byte
+//go:embed animations/mouth_idle_left.animbyte
+var mouthIdleLeftData []byte
 
-//go:embed animations/nifri.animbyte
-var nifriData []byte
+//go:embed animations/mouth_idle_right.animbyte
+var mouthIdleRightData []byte
 
-//go:embed animations/spinnylambda.animbyte
-var spinnylambdaData []byte
+// EMBED_END
 
 // buildRole and buildAddress are set at compile time via -ldflags
 // e.g. -ldflags="-X main.buildRole=worker -X main.buildAddress=worker-0"
@@ -52,6 +52,7 @@ func main() {
 	led.Configure(machine.PinConfig{Mode: machine.PinOutput})
 
 	// Load animations
+// LOAD_START
 	eyeBlinkAnim, err := cmd.LoadAnimation(eyeBlinkData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_blink")
 	if err != nil {
 		fmt.Println("Error loading eye_blink:", err)
@@ -62,38 +63,34 @@ func main() {
 		fmt.Println("Error loading eye_idle:", err)
 	}
 
-	mouthAnim, err := cmd.LoadAnimation(mouthIdleData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_idle")
+	mouthIdleLeftAnim, err := cmd.LoadAnimation(mouthIdleLeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_idle_left")
 	if err != nil {
-		fmt.Println("Error loading mouth_idle:", err)
+		fmt.Println("Error loading mouth_idle_left:", err)
 	}
 
-	nifriAnim, err := cmd.LoadAnimation(nifriData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "nifri")
+	mouthIdleRightAnim, err := cmd.LoadAnimation(mouthIdleRightData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_idle_right")
 	if err != nil {
-		fmt.Println("Error loading nifri:", err)
+		fmt.Println("Error loading mouth_idle_right:", err)
 	}
 
-	spinnyAnim, err := cmd.LoadAnimation(spinnylambdaData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "spinnylambda")
-	if err != nil {
-		fmt.Println("Error loading spinnylambda:", err)
-	}
+	// LOAD_END
 
 	// Populate global array in cmd package
+// APPEND_START
 	cmd.LoadedAnimations = nil
-	if eyeIdleAnim != nil {
-		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeIdleAnim)
-	}
 	if eyeBlinkAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeBlinkAnim)
 	}
-	if mouthAnim != nil {
-		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthAnim)
+	if eyeIdleAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeIdleAnim)
 	}
-	if nifriAnim != nil {
-		cmd.LoadedAnimations = append(cmd.LoadedAnimations, nifriAnim)
+	if mouthIdleLeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthIdleLeftAnim)
 	}
-	if spinnyAnim != nil {
-		cmd.LoadedAnimations = append(cmd.LoadedAnimations, spinnyAnim)
+	if mouthIdleRightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthIdleRightAnim)
 	}
+	// APPEND_END
 
 	// blink LED based on role, 2 times, 200ms interval for Dispatcher, 5 times 200ms for Worker
 
