@@ -53,7 +53,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		c := byte(cmd)
 		e := byte(eye)
 		m := byte(mouth)
-		checksum := a + c + e + m
+		checksum := Crc8([]byte{a, c, e, m})
 
 		select {
 		case uartChan <- [6]byte{header, a, c, e, m, checksum}:
@@ -62,15 +62,12 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		}
 	}
 
-	// Keepalive Goroutine
+	// Keepalive Goroutine - broadcast to all workers
 	go func() {
-		allWorkers := []Address{Worker_0, Worker_1, Worker_2, Worker_3}
 		for {
-			time.Sleep(1 * time.Second)
-			for _, w := range allWorkers {
-				// Send NoOp as keepalive
-				sendPacket(w, Cmd_NoOp, Anim_EyeIdle, Anim_MouthIdle)
-			}
+			time.Sleep(5 * time.Second)
+			// Single broadcast packet reaches all workers
+			sendPacket(Address_All, Cmd_NoOp, Anim_EyeIdle, Anim_MouthIdle)
 		}
 	}()
 

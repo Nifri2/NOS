@@ -5,7 +5,8 @@ import (
 	"machine"
 	"time"
 
-	"tinygo.org/x/drivers/ws2812"
+	pio "github.com/tinygo-org/pio/rp2-pio"
+	"github.com/tinygo-org/pio/rp2-pio/piolib"
 )
 
 // Each MCU takes care of 1 mouth and 1 eye WS2812 strip
@@ -32,6 +33,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	// [Header, Addr, Cmd, Eye, Mouth, Checksum]
 	buf := make([]byte, PacketSize)
 	bufIdx := 0
+	lastByteTime := time.Now()
 
 	var loopCounter int
 
@@ -43,8 +45,14 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 			loopCounter = 0
 		}
 
+		// Inter-byte timeout: reset buffer if >20ms since last byte
+		if bufIdx > 0 && time.Since(lastByteTime) > 20*time.Millisecond {
+			bufIdx = 0
+		}
+
 		if uart.Buffered() > 0 {
 			b, _ := uart.ReadByte()
+			lastByteTime = time.Now()
 
 			// State machine-ish logic
 			if bufIdx == 0 {
@@ -59,8 +67,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 				bufIdx++
 
 				if bufIdx == PacketSize {
-					// Packet complete, verify checksum
-					// Checksum = Addr + Cmd + Eye + Mouth
+					// Packet complete, verify CRC-8/MAXIM checksum
 					// buf = [AA, Addr, Cmd, Eye, Mouth, Checksum]
 					addrByte := buf[1]
 					cmdByte := buf[2]
@@ -68,13 +75,14 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 					mouthByte := buf[4]
 					checksumByte := buf[5]
 
-					calculatedChecksum := addrByte + cmdByte + eyeByte + mouthByte
+					calculatedChecksum := Crc8(buf[1:5])
 
 					if calculatedChecksum == checksumByte {
 						// Valid packet
 						fmt.Printf("Rx: Cmd=%x Eye=%x Mouth=%x\n", cmdByte, eyeByte, mouthByte)
 
-						if Address(addrByte) == config.Address {
+						// Accept if addressed to us or broadcast
+						if Address(addrByte) == config.Address || Address(addrByte) == Address_All {
 							cmd := Command(cmdByte)
 							switch cmd {
 							case Cmd_LedOn:
@@ -137,15 +145,46 @@ func displayAnimation(animChan chan animUpdate) {
 	eyeIdleAnim := findAnim("eye_idle")
 	mouthAnim := findAnim("mouth_idle")
 
-	// we need to use GPIO far away from UART pins to avoid chatter
-	// we use GP18 for eye and GP16 for mouth
-	ledPin1 := machine.GP18
-	ledPin1.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	strip1 := ws2812.New(ledPin1)
+	// Helper to convert []byte (G,R,B triplets) to []uint32 for PIO WS2812
+	// Color format: uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
+	bytesToRaw := func(data []byte) []uint32 {
+		pixelCount := len(data) / 3
+		raw := make([]uint32, pixelCount)
+		for i := 0; i < pixelCount; i++ {
+			g := data[i*3]
+			r := data[i*3+1]
+			b := data[i*3+2]
+			raw[i] = uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
+		}
+		return raw
+	}
 
-	ledPin2 := machine.GP12
-	ledPin2.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	strip2 := ws2812.New(ledPin2)
+	// PIO-based WS2812 - immune to UART interrupts
+	// Eye strip: PIO0 SM0, GP18
+	sm0, err := pio.PIO0.ClaimStateMachine()
+	if err != nil {
+		println("Failed to claim SM0:", err.Error())
+		return
+	}
+	strip1, err := piolib.NewWS2812B(sm0, machine.GP18)
+	if err != nil {
+		println("Failed to init eye strip:", err.Error())
+		return
+	}
+	strip1.EnableDMA(true)
+
+	// Mouth strip: PIO0 SM1, GP12
+	sm1, err := pio.PIO0.ClaimStateMachine()
+	if err != nil {
+		println("Failed to claim SM1:", err.Error())
+		return
+	}
+	strip2, err := piolib.NewWS2812B(sm1, machine.GP12)
+	if err != nil {
+		println("Failed to init mouth strip:", err.Error())
+		return
+	}
+	strip2.EnableDMA(true)
 
 	// Boop Sensor will be connected on GP15
 
@@ -191,22 +230,15 @@ func displayAnimation(animChan chan animUpdate) {
 		// Safety check for nil animations if load failed
 		if currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
 			eyeFrame := currentEyeAnim.Frames[eyeFrameCounter%int64(currentEyeAnim.FrameCount)]
-			_, err := strip1.Write(eyeFrame)
-			if err != nil {
-				// println(err.Error()) // Optional: reduce spam
-			}
+			strip1.WriteRaw(bytesToRaw(eyeFrame))
 		}
 
 		if currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
 			mouthFrame := currentMouthAnim.Frames[mouthFrameCounter%int64(currentMouthAnim.FrameCount)]
-			_, err := strip2.Write(mouthFrame)
-			if err != nil {
-				// println(err.Error())
-			}
+			strip2.WriteRaw(bytesToRaw(mouthFrame))
 		}
 
-		// Delay for the WS2812 reset pulse
-		time.Sleep(300 * time.Microsecond)
+		// PIO handles latch timing internally - no manual reset delay needed
 
 		eyeFrameCounter++
 		mouthFrameCounter++

@@ -17,6 +17,9 @@ const (
 	Worker_3         // 0x04
 )
 
+// Broadcast address - all workers accept packets with this address
+const Address_All Address = 0xFF
+
 type Command int
 
 const (

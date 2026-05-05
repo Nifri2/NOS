@@ -4,6 +4,147 @@
 
 **N**itrous **O**xide / **N**ibble**OS** - Firmware for Nibble the protogen.
 
+## Architecture
+
+NOS uses a distributed master-worker architecture with 5 RP2350 (Pico 2) microcontrollers communicating over a shared UART bus.
+
+```mermaid
+flowchart TB
+    subgraph Dispatcher["Dispatcher (RP2350)"]
+        Radio[4-Pin Radio Input]
+        State[State Machine]
+        TX[UART TX]
+    end
+
+    subgraph Bus["Shared UART Bus (38400 baud)"]
+        Buffer[74AHCT125N Buffer]
+    end
+
+    subgraph Worker0["Worker 0 - Left Eye/Mouth"]
+        RX0[UART RX]
+        PIO0_0[PIO0 SM0 - Eye]
+        PIO0_1[PIO0 SM1 - Mouth]
+        Eye0[Eye Panel\n16x16 LEDs]
+        Mouth0[Mouth Panel\n32x16 LEDs]
+    end
+
+    subgraph Worker1["Worker 1 - Right Eye/Mouth"]
+        RX1[UART RX]
+        PIO1_0[PIO0 SM0 - Eye]
+        PIO1_1[PIO0 SM1 - Mouth]
+        Eye1[Eye Panel\n16x16 LEDs]
+        Mouth1[Mouth Panel\n32x16 LEDs]
+    end
+
+    subgraph Worker2["Worker 2 - Insignia"]
+        RX2[UART RX]
+        PIO2[PIO0 - Display]
+    end
+
+    subgraph Worker3["Worker 3 - Reserved"]
+        RX3[UART RX]
+    end
+
+    Radio --> State
+    State --> TX
+    TX --> Buffer
+    Buffer --> RX0 & RX1 & RX2 & RX3
+
+    RX0 --> PIO0_0 & PIO0_1
+    PIO0_0 --> Eye0
+    PIO0_1 --> Mouth0
+
+    RX1 --> PIO1_0 & PIO1_1
+    PIO1_0 --> Eye1
+    PIO1_1 --> Mouth1
+
+    RX2 --> PIO2
+```
+
+### Components
+
+| Component | Role | Address |
+|-----------|------|---------|
+| Dispatcher | Master controller, handles radio input, sends animation commands | `0x00` |
+| Worker 0 | Left eye (GP18) + left mouth (GP12) | `0x01` |
+| Worker 1 | Right eye (GP18) + right mouth (GP12) | `0x02` |
+| Worker 2 | Insignia display | `0x03` |
+| Worker 3 | Reserved for future use | `0x04` |
+| Broadcast | All workers respond | `0xFF` |
+
+### Communication Flow
+
+```mermaid
+sequenceDiagram
+    participant D as Dispatcher
+    participant B as UART Bus
+    participant W0 as Worker 0
+    participant W1 as Worker 1
+
+    Note over D: Radio button pressed
+    D->>B: [0xAA, 0xFF, 0x03, 0x01, 0x10, CRC8]
+    Note over B: Broadcast: Display Anim<br/>Eye=Blink, Mouth=Idle
+
+    B->>W0: Packet received
+    B->>W1: Packet received
+
+    Note over W0: Addr 0xFF = broadcast<br/>CRC8 valid ✓<br/>Map 0x10 → 0x02 (left)
+    Note over W1: Addr 0xFF = broadcast<br/>CRC8 valid ✓<br/>Map 0x10 → 0x03 (right)
+
+    W0->>W0: PIO writes to eye strip
+    W0->>W0: PIO writes to mouth strip
+    W1->>W1: PIO writes to eye strip
+    W1->>W1: PIO writes to mouth strip
+
+    loop Every 5 seconds
+        D->>B: [0xAA, 0xFF, 0x00, 0x00, 0x10, CRC8]
+        Note over B: Broadcast keepalive
+        B->>W0: Feeds watchdog
+        B->>W1: Feeds watchdog
+    end
+```
+
+## Protocol
+
+### Packet Format (6 bytes)
+
+| Byte | Field | Description |
+|------|-------|-------------|
+| 0 | Header | Always `0xAA` |
+| 1 | Address | Target worker (`0x01`-`0x04`) or broadcast (`0xFF`) |
+| 2 | Command | `0x00`=NoOp, `0x01`=LedOn, `0x02`=LedOff, `0x03`=DisplayAnim |
+| 3 | Eye Anim | Animation ID for eye panel |
+| 4 | Mouth Anim | Animation ID for mouth panel |
+| 5 | Checksum | CRC-8/MAXIM of bytes 1-4 |
+
+### CRC-8/MAXIM
+
+- Polynomial: `0x31`
+- Initial value: `0x00`
+- No reflection, no XOR out
+- Example: `CRC8([0x01, 0x03, 0x00, 0x10]) = 0x12`
+
+### Protocol Hardening
+
+- **Inter-byte timeout**: Buffer resets if >20ms between bytes (handles partial packets)
+- **Broadcast address**: `0xFF` reaches all workers with single packet
+- **Watchdog**: 5-second timeout per worker, fed by keepalive packets
+
+## WS2812 LED Driver
+
+Workers use **PIO-based WS2812** instead of software bit-banging. This prevents UART RX interrupts from disrupting LED timing.
+
+| Feature | Bit-banged (old) | PIO-based (current) |
+|---------|------------------|---------------------|
+| Timing source | CPU cycles | PIO state machine |
+| Interrupt immune | No | Yes |
+| DMA support | No | Yes |
+| Reset pulse | Manual 300µs delay | Automatic |
+
+Each worker uses two PIO state machines from PIO0:
+- **SM0**: Eye strip (256 LEDs on GP18)
+- **SM1**: Mouth strip (512 LEDs on GP12)
+
 ## Requirements
 
 - [TinyGo](https://tinygo.org/) - Go compiler for embedded systems
