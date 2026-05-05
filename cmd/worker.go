@@ -12,17 +12,40 @@ import (
 // Each MCU takes care of 1 mouth and 1 eye WS2812 strip
 // There will be a sperate worker that will only display Insignia animations
 
-func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
-	// Listen for commands from Dispatcher
-	fmt.Println("Starting Worker Loop")
+// Debug flag - set to true to log every received byte
+const debugRxBytes = false
 
-	// Configure Watchdog (5s timeout)
+func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
+	// ============================================================
+	// PHASE C: Visible "RunWorker entered" signal BEFORE anything else
+	// Toggle LED 10 times at 100ms intervals (2 seconds visible)
+	// ============================================================
+	for i := 0; i < 10; i++ {
+		led.High()
+		time.Sleep(100 * time.Millisecond)
+		led.Low()
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Print banner 3 times with gaps - some may land even if USB slow
+	for i := 0; i < 3; i++ {
+		println("========================================")
+		println("RunWorker ENTERED - addr=", int(config.Address))
+		println("========================================")
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Now configure watchdog
+	println("Configuring watchdog (5s timeout)...")
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 5000})
+	println("Watchdog configured")
 
 	animChan := make(chan animUpdate, 1)
 
 	// Start animation routine in background
-	go displayAnimation(animChan)
+	println("Starting displayAnimation goroutine...")
+	go displayAnimation(animChan, led)
+	println("displayAnimation goroutine started")
 
 	const (
 		HeaderByte = 0xAA
@@ -35,24 +58,61 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	bufIdx := 0
 	lastByteTime := time.Now()
 
-	var loopCounter int
+	// Diagnostic counters
+	var rxBytes uint32
+	var rxPackets uint32
+	lastHeartbeat := time.Now()
+	lastLedToggle := time.Now()
+	ledState := false
+
+	println("Entering main UART loop...")
 
 	for {
-		// Feed watchdog approx every second (1000 * 1ms sleep)
-		loopCounter++
-		if loopCounter > 1000 {
-			machine.Watchdog.Update()
-			loopCounter = 0
+		now := time.Now()
+
+		// ============================================================
+		// PHASE D: 1Hz LED heartbeat - proves loop is running
+		// Uses time.Since() for robustness against loop timing changes
+		// ============================================================
+		if time.Since(lastLedToggle) >= time.Second {
+			ledState = !ledState
+			if ledState {
+				led.High()
+			} else {
+				led.Low()
+			}
+			lastLedToggle = now
+			machine.Watchdog.Update() // Feed watchdog on LED toggle
+		}
+
+		// Heartbeat log every 2 seconds
+		if time.Since(lastHeartbeat) >= 2*time.Second {
+			fmt.Printf("[HB] rxBytes=%d rxPackets=%d bufIdx=%d\n", rxBytes, rxPackets, bufIdx)
+			lastHeartbeat = now
 		}
 
 		// Inter-byte timeout: reset buffer if >20ms since last byte
 		if bufIdx > 0 && time.Since(lastByteTime) > 20*time.Millisecond {
+			// Dump partial buffer for debugging
+			fmt.Printf("[TIMEOUT] bufIdx=%d partial=[", bufIdx)
+			for i := 0; i < bufIdx; i++ {
+				fmt.Printf("%02X", buf[i])
+				if i < bufIdx-1 {
+					print(" ")
+				}
+			}
+			println("]")
 			bufIdx = 0
 		}
 
 		if uart.Buffered() > 0 {
 			b, _ := uart.ReadByte()
-			lastByteTime = time.Now()
+			rxBytes++
+			lastByteTime = now
+
+			if debugRxBytes {
+				fmt.Printf("[RX] byte=%02X bufIdx=%d\n", b, bufIdx)
+			}
 
 			// State machine-ish logic
 			if bufIdx == 0 {
@@ -79,7 +139,9 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 
 					if calculatedChecksum == checksumByte {
 						// Valid packet
-						fmt.Printf("Rx: Cmd=%x Eye=%x Mouth=%x\n", cmdByte, eyeByte, mouthByte)
+						rxPackets++
+						fmt.Printf("[PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
+							rxPackets, addrByte, cmdByte, eyeByte, mouthByte)
 
 						// Accept if addressed to us or broadcast
 						if Address(addrByte) == config.Address || Address(addrByte) == Address_All {
@@ -87,10 +149,12 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 							switch cmd {
 							case Cmd_LedOn:
 								led.High()
+								ledState = true
 							case Cmd_LedOff:
 								led.Low()
+								ledState = false
 							case Cmd_NoOp:
-								// NoOp
+								// NoOp - just keeps watchdog happy via packet receipt
 							case Cmd_DisplayAnim:
 								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
 								mouthIdx := MapAnimation(config.Address, AnimationID(mouthByte))
@@ -103,12 +167,25 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 									update.Mouth = LoadedAnimations[mouthIdx]
 								}
 								if update.Eye != nil || update.Mouth != nil {
-									animChan <- update
+									// Non-blocking send - don't stall UART if animation is slow
+									select {
+									case animChan <- update:
+									default:
+										println("[WARN] animChan full, dropping update")
+									}
 								}
 							}
 						}
 					} else {
-						fmt.Printf("Checksum mismatch: calc %x != recv %x\n", calculatedChecksum, checksumByte)
+						// CRC fail - dump full packet for debugging
+						fmt.Printf("[CRC FAIL] calc=%02X recv=%02X pkt=[", calculatedChecksum, checksumByte)
+						for i := 0; i < PacketSize; i++ {
+							fmt.Printf("%02X", buf[i])
+							if i < PacketSize-1 {
+								print(" ")
+							}
+						}
+						println("]")
 					}
 
 					// Reset buffer
@@ -122,12 +199,13 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	}
 }
 
-// TODOS:
-// - Implement some sort of Queue for animation updates? The animations abruptly change now and it doesnt look great
+func displayAnimation(animChan chan animUpdate, led machine.Pin) {
+	println("[ANIM] displayAnimation started, waiting 2s for board stabilization...")
 
-func displayAnimation(animChan chan animUpdate) {
 	// Wait for the board to stabilize
 	time.Sleep(2 * time.Second)
+
+	println("[ANIM] Stabilization complete, initializing...")
 
 	// Defaults if loading failed (or empty)
 	// We assume LoadedAnimations is populated by main before calling RunWorker
@@ -145,6 +223,8 @@ func displayAnimation(animChan chan animUpdate) {
 	eyeIdleAnim := findAnim("eye_idle")
 	mouthAnim := findAnim("mouth_idle")
 
+	fmt.Printf("[ANIM] Found eye_idle=%v mouth_idle=%v\n", eyeIdleAnim != nil, mouthAnim != nil)
+
 	// Helper to convert []byte (G,R,B triplets) to []uint32 for PIO WS2812
 	// Color format: uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
 	bytesToRaw := func(data []byte) []uint32 {
@@ -160,33 +240,63 @@ func displayAnimation(animChan chan animUpdate) {
 	}
 
 	// PIO-based WS2812 - immune to UART interrupts
+	// Track whether PIO init succeeded
+	var strip1 *piolib.WS2812B
+	var strip2 *piolib.WS2812B
+	eyeOK := false
+	mouthOK := false
+
 	// Eye strip: PIO0 SM0, GP18
+	println("[ANIM] Claiming SM0 for eye strip...")
 	sm0, err := pio.PIO0.ClaimStateMachine()
 	if err != nil {
-		println("Failed to claim SM0:", err.Error())
-		return
+		println("[ANIM] ERROR: Failed to claim SM0:", err.Error())
+		// Don't return - continue without eye strip
+	} else {
+		println("[ANIM] SM0 claimed, initializing WS2812B on GP18...")
+		strip1, err = piolib.NewWS2812B(sm0, machine.GP18)
+		if err != nil {
+			println("[ANIM] ERROR: Failed to init eye strip:", err.Error())
+		} else {
+			println("[ANIM] Eye strip initialized, enabling DMA...")
+			strip1.EnableDMA(true)
+			eyeOK = true
+			println("[ANIM] Eye strip ready")
+		}
 	}
-	strip1, err := piolib.NewWS2812B(sm0, machine.GP18)
-	if err != nil {
-		println("Failed to init eye strip:", err.Error())
-		return
-	}
-	strip1.EnableDMA(true)
 
 	// Mouth strip: PIO0 SM1, GP12
+	println("[ANIM] Claiming SM1 for mouth strip...")
 	sm1, err := pio.PIO0.ClaimStateMachine()
 	if err != nil {
-		println("Failed to claim SM1:", err.Error())
-		return
+		println("[ANIM] ERROR: Failed to claim SM1:", err.Error())
+		// Don't return - continue without mouth strip
+	} else {
+		println("[ANIM] SM1 claimed, initializing WS2812B on GP12...")
+		strip2, err = piolib.NewWS2812B(sm1, machine.GP12)
+		if err != nil {
+			println("[ANIM] ERROR: Failed to init mouth strip:", err.Error())
+		} else {
+			println("[ANIM] Mouth strip initialized, enabling DMA...")
+			strip2.EnableDMA(true)
+			mouthOK = true
+			println("[ANIM] Mouth strip ready")
+		}
 	}
-	strip2, err := piolib.NewWS2812B(sm1, machine.GP12)
-	if err != nil {
-		println("Failed to init mouth strip:", err.Error())
-		return
-	}
-	strip2.EnableDMA(true)
 
-	// Boop Sensor will be connected on GP15
+	fmt.Printf("[ANIM] PIO init complete: eye=%v mouth=%v\n", eyeOK, mouthOK)
+
+	// If both strips failed, blink LED rapidly to indicate error but don't exit
+	if !eyeOK && !mouthOK {
+		println("[ANIM] WARNING: Both strips failed! Blinking error pattern...")
+		for i := 0; i < 20; i++ {
+			led.High()
+			time.Sleep(50 * time.Millisecond)
+			led.Low()
+			time.Sleep(50 * time.Millisecond)
+		}
+		println("[ANIM] Continuing anyway (will just consume animChan)...")
+	}
 
 	var currentEyeAnim *Animation
 	var currentMouthAnim *Animation
@@ -214,26 +324,31 @@ func displayAnimation(animChan chan animUpdate) {
 	var eyeFrameCounter int64
 	var mouthFrameCounter int64
 
+	println("[ANIM] Entering animation loop...")
+
 	for {
-		// Check for new animation command
+		// Check for new animation command (non-blocking)
 		select {
 		case update := <-animChan:
 			if update.Eye != nil {
 				queuedEyeAnim = update.Eye
+				fmt.Printf("[ANIM] Queued eye: %s\n", update.Eye.Name)
 			}
 			if update.Mouth != nil {
 				queuedMouthAnim = update.Mouth
+				fmt.Printf("[ANIM] Queued mouth: %s\n", update.Mouth.Name)
 			}
 		default:
 		}
 
-		// Safety check for nil animations if load failed
-		if currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
+		// Write to eye strip if available
+		if eyeOK && currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
 			eyeFrame := currentEyeAnim.Frames[eyeFrameCounter%int64(currentEyeAnim.FrameCount)]
 			strip1.WriteRaw(bytesToRaw(eyeFrame))
 		}
 
-		if currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
+		// Write to mouth strip if available
+		if mouthOK && currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
 			mouthFrame := currentMouthAnim.Frames[mouthFrameCounter%int64(currentMouthAnim.FrameCount)]
 			strip2.WriteRaw(bytesToRaw(mouthFrame))
 		}
@@ -246,7 +361,7 @@ func displayAnimation(animChan chan animUpdate) {
 		// Transition at end of cycle
 		if queuedEyeAnim != nil && currentEyeAnim != nil && eyeFrameCounter > 0 && (eyeFrameCounter%int64(currentEyeAnim.FrameCount) == 0) {
 			if queuedEyeAnim != currentEyeAnim {
-				fmt.Printf("Transitioning Eye to: %s\n", queuedEyeAnim.Name)
+				fmt.Printf("[ANIM] Transitioning Eye to: %s\n", queuedEyeAnim.Name)
 				currentEyeAnim = queuedEyeAnim
 				eyeFrameCounter = 0
 			}
@@ -255,7 +370,7 @@ func displayAnimation(animChan chan animUpdate) {
 
 		if queuedMouthAnim != nil && currentMouthAnim != nil && mouthFrameCounter > 0 && (mouthFrameCounter%int64(currentMouthAnim.FrameCount) == 0) {
 			if queuedMouthAnim != currentMouthAnim {
-				fmt.Printf("Transitioning Mouth to: %s\n", queuedMouthAnim.Name)
+				fmt.Printf("[ANIM] Transitioning Mouth to: %s\n", queuedMouthAnim.Name)
 				currentMouthAnim = queuedMouthAnim
 				mouthFrameCounter = 0
 			}

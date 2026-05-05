@@ -92,10 +92,11 @@ func main() {
 	}
 	// APPEND_END
 
-	// blink LED based on role, 2 times, 200ms interval for Dispatcher, 5 times 200ms for Worker
-
+	// Blink LED based on role - visible "I am alive" indicator BEFORE serial
+	// Phase 1: Quick role identification blinks
 	switch config.Role {
 	case cmd.Dispatcher:
+		// 2 fast blinks for dispatcher
 		for i := 0; i < 2; i++ {
 			led.High()
 			time.Sleep(200 * time.Millisecond)
@@ -103,6 +104,7 @@ func main() {
 			time.Sleep(200 * time.Millisecond)
 		}
 	case cmd.Worker:
+		// 5 fast blinks for worker
 		for i := 0; i < 5; i++ {
 			led.High()
 			time.Sleep(40 * time.Millisecond)
@@ -111,8 +113,40 @@ func main() {
 		}
 	}
 
-	// Main loop
+	// Phase 2: Role-specific pattern to confirm main() reached role switch
+	switch config.Role {
+	case cmd.Dispatcher:
+		// Morse-ish: short-long-short (S) pattern x3
+		for i := 0; i < 3; i++ {
+			led.High()
+			time.Sleep(100 * time.Millisecond) // short
+			led.Low()
+			time.Sleep(100 * time.Millisecond)
+			led.High()
+			time.Sleep(400 * time.Millisecond) // long
+			led.Low()
+			time.Sleep(100 * time.Millisecond)
+			led.High()
+			time.Sleep(100 * time.Millisecond) // short
+			led.Low()
+			time.Sleep(300 * time.Millisecond) // gap between patterns
+		}
+	case cmd.Worker:
+		// 3 long blinks (500ms on / 500ms off)
+		for i := 0; i < 3; i++ {
+			led.High()
+			time.Sleep(500 * time.Millisecond)
+			led.Low()
+			time.Sleep(500 * time.Millisecond)
+		}
 
+		// USB warmup delay - let USB-CDC enumerate before serial output
+		time.Sleep(2 * time.Second)
+		println("BOOT main: role=worker addr=", buildAddress)
+		time.Sleep(500 * time.Millisecond) // let terminal attach
+	}
+
+	// Main loop
 	switch config.Role {
 	case cmd.Dispatcher:
 		cmd.RunDispatcher(config, uart, led)
