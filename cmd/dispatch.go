@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"machine"
 	"math/rand"
 	"time"
@@ -20,10 +21,21 @@ var Radio_Pins = []machine.Pin{Radio_Pin_0, Radio_Pin_1, Radio_Pin_2, Radio_Pin_
 // Example: [address, command, animID_eye, animID_mouth]
 
 func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
-	println("Starting Dispatcher Loop (Simple)")
+	// Startup banner 3x with 200ms gaps (matches worker pattern)
+	for i := 0; i < 3; i++ {
+		println("========================================")
+		fmt.Printf("RunDispatcher ENTERED - addr=%d\n", int(config.Address))
+		println("UART: 38400 baud, TX=GP0, RX=GP1")
+		println("========================================")
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	println("Starting Dispatcher Loop")
 
 	// Configure Watchdog (5s timeout)
+	println("Configuring watchdog (5s timeout)...")
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 5000})
+	println("Watchdog configured")
 
 	// Radio Channel
 	radioChan := make(chan byte, 10)
@@ -31,16 +43,38 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// UART Output Channel to ensure atomic packet writes
 	uartChan := make(chan [6]byte, 20)
 
-	// UART Writer Goroutine
+	// TX diagnostic counters
+	// txQueued/txDropped owned by sendPacket (main goroutine)
+	// txWritten owned by UART writer goroutine
+	// radioEvents owned by radio goroutine (incremented via channel read in main loop)
+	var txQueued uint32
+	var txDropped uint32
+	var txWritten uint32
+	var radioEvents uint32
+
+	// UART Writer Goroutine with recoverable supervisor
 	go func() {
-		for packet := range uartChan {
-			uart.Write(packet[:])
-			// Log TX for debugging
-			println("TX -> Addr:", packet[1], "Cmd:", packet[2])
+		for {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Printf("[UART WRITER PANIC] %v\n", r)
+						time.Sleep(time.Second)
+					}
+				}()
+				for packet := range uartChan {
+					uart.Write(packet[:])
+					txWritten++
+					if debugLog {
+						println("TX -> Addr:", packet[1], "Cmd:", packet[2])
+					}
+				}
+			}()
+			println("[UART WRITER] Restarting...")
 		}
 	}()
 
-	// Radio handling goroutine
+	// Radio handling goroutine with recoverable supervisor
 	go runRadioLogic(radioChan)
 
 	// Current State
@@ -57,8 +91,10 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		select {
 		case uartChan <- [6]byte{header, a, c, e, m, checksum}:
+			txQueued++
 		default:
-			println("UART Queue Full!")
+			txDropped++
+			println("[WARN] UART Queue Full!")
 		}
 	}
 
@@ -78,6 +114,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		// Check immediately before sleeping
 		select {
 		case code := <-radioChan:
+			radioEvents++
 			return code, true
 		default:
 		}
@@ -85,6 +122,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		// Sleep
 		select {
 		case code := <-radioChan:
+			radioEvents++
 			return code, true
 		case <-time.After(time.Duration(ms) * time.Millisecond):
 			return 0, false
@@ -94,13 +132,41 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Initialize RNG
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
+	// 1Hz LED heartbeat and 10s heartbeat log
+	lastLedToggle := time.Now()
+	lastHeartbeat := time.Now()
+	ledState := false
+
+	println("Entering main dispatcher loop...")
+
+	// TODO: Send Cmd_Ping to Address_All on a chosen radio input for liveness check
+
 	for {
+		now := time.Now()
+
+		// 1Hz LED heartbeat - proves loop is running
+		if time.Since(lastLedToggle) >= time.Second {
+			ledState = !ledState
+			if ledState {
+				led.High()
+			} else {
+				led.Low()
+			}
+			lastLedToggle = now
+		}
+
+		// Heartbeat log every 10 seconds with counters
+		if time.Since(lastHeartbeat) >= 10*time.Second {
+			fmt.Printf("[HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d mode=0x%02X\n",
+				txQueued, txWritten, txDropped, radioEvents, currentMode)
+			machine.Watchdog.Update()
+			lastHeartbeat = now
+		}
+
 		machine.Watchdog.Update()
 
 		switch currentMode {
 		case 0x00: // Standard Idle (Workers 0 & 1)
-			// println("Mode: Standard")
-
 			workers := []Address{Worker_0, Worker_1}
 
 			// 1. Random Sleep
@@ -129,10 +195,6 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			}
 
 		case 0x10: // Insignia Spinny (Worker 2)
-			// println("Mode: Insignia")
-
-			// Ensure animation is set
-			// sendPacket(Worker_2, Cmd_DisplayAnim, Anim_SpinnyLambda, Anim_MouthIdle)
 			sendPacket(Worker_2, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
 
 			// Just wait and check for interrupt
@@ -149,7 +211,24 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	}
 }
 
+// runRadioLogic is a recoverable supervisor for radio input handling
 func runRadioLogic(out chan byte) {
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("[RADIO PANIC] %v\n", r)
+					time.Sleep(time.Second)
+				}
+			}()
+			runRadioLogicLoop(out)
+		}()
+		println("[RADIO] Restarting radio logic...")
+	}
+}
+
+// runRadioLogicLoop handles the actual radio pin monitoring
+func runRadioLogicLoop(out chan byte) {
 	for _, pin := range Radio_Pins {
 		pin.Configure(machine.PinConfig{Mode: machine.PinInput})
 	}
@@ -201,11 +280,14 @@ func runRadioLogic(out chan byte) {
 			result = byte(p1)
 		}
 
-		// Non-blocking send if possible, else blocking is fine here
+		// Non-blocking send if possible
 		select {
 		case out <- result:
-			println("Radio ->", result)
+			if debugLog {
+				println("Radio ->", result)
+			}
 		default:
+			println("[WARN] Radio channel full, dropping input")
 		}
 	}
 }

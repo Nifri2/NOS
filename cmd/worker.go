@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"machine"
+	"runtime"
 	"time"
 
 	pio "github.com/tinygo-org/pio/rp2-pio"
@@ -10,10 +11,13 @@ import (
 )
 
 // Each MCU takes care of 1 mouth and 1 eye WS2812 strip
-// There will be a sperate worker that will only display Insignia animations
+// There will be a separate worker that will only display Insignia animations
 
-// Debug flag - set to true to log every received byte
-const debugRxBytes = false
+// Expected frame sizes for validation
+const (
+	expectedEyeBytes   = EyeFrameWidth * EyeFrameHeight * 3     // 768 bytes
+	expectedMouthBytes = MouthFrameWidth * MouthFrameHeight * 3 // 1536 bytes
+)
 
 func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	// ============================================================
@@ -85,8 +89,8 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 			machine.Watchdog.Update() // Feed watchdog on LED toggle
 		}
 
-		// Heartbeat log every 2 seconds
-		if time.Since(lastHeartbeat) >= 2*time.Second {
+		// Heartbeat log every 10 seconds
+		if time.Since(lastHeartbeat) >= 10*time.Second {
 			fmt.Printf("[HB] rxBytes=%d rxPackets=%d bufIdx=%d\n", rxBytes, rxPackets, bufIdx)
 			lastHeartbeat = now
 		}
@@ -110,7 +114,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 			rxBytes++
 			lastByteTime = now
 
-			if debugRxBytes {
+			if debugLog {
 				fmt.Printf("[RX] byte=%02X bufIdx=%d\n", b, bufIdx)
 			}
 
@@ -140,8 +144,10 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 					if calculatedChecksum == checksumByte {
 						// Valid packet
 						rxPackets++
-						fmt.Printf("[PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
-							rxPackets, addrByte, cmdByte, eyeByte, mouthByte)
+						if debugLog {
+							fmt.Printf("[PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
+								rxPackets, addrByte, cmdByte, eyeByte, mouthByte)
+						}
 
 						// Accept if addressed to us or broadcast
 						if Address(addrByte) == config.Address || Address(addrByte) == Address_All {
@@ -155,6 +161,8 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 								ledState = false
 							case Cmd_NoOp:
 								// NoOp - just keeps watchdog happy via packet receipt
+							case Cmd_Ping:
+								println("[PING from dispatcher]")
 							case Cmd_DisplayAnim:
 								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
 								mouthIdx := MapAnimation(config.Address, AnimationID(mouthByte))
@@ -199,16 +207,38 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	}
 }
 
+// displayAnimation is a recoverable supervisor that restarts the animation loop on panic
 func displayAnimation(animChan chan animUpdate, led machine.Pin) {
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("[ANIM PANIC] %v\n", r)
+					// Blink LED rapidly to signal panic
+					for i := 0; i < 10; i++ {
+						led.High()
+						time.Sleep(50 * time.Millisecond)
+						led.Low()
+						time.Sleep(50 * time.Millisecond)
+					}
+					runtime.GC() // Reduce odds of allocator state corruption
+					time.Sleep(time.Second)
+				}
+			}()
+			displayAnimationLoop(animChan, led)
+		}()
+		println("[ANIM] Restarting animation loop...")
+	}
+}
+
+// displayAnimationLoop is the actual animation rendering logic
+func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	println("[ANIM] displayAnimation started, waiting 2s for board stabilization...")
 
 	// Wait for the board to stabilize
 	time.Sleep(2 * time.Second)
 
 	println("[ANIM] Stabilization complete, initializing...")
-
-	// Defaults if loading failed (or empty)
-	// We assume LoadedAnimations is populated by main before calling RunWorker
 
 	// Helper to find animation by name
 	findAnim := func(name string) *Animation {
@@ -239,19 +269,41 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 		return raw
 	}
 
+	// Helper to pre-convert all frames of an animation
+	preconvert := func(anim *Animation) [][]uint32 {
+		if anim == nil || len(anim.Frames) == 0 {
+			return nil
+		}
+		result := make([][]uint32, len(anim.Frames))
+		for i, f := range anim.Frames {
+			result[i] = bytesToRaw(f)
+		}
+		return result
+	}
+
 	// PIO-based WS2812 - immune to UART interrupts
-	// Track whether PIO init succeeded
 	var strip1 *piolib.WS2812B
 	var strip2 *piolib.WS2812B
 	eyeOK := false
 	mouthOK := false
+
+	// safeWrite wraps WriteRaw with panic recovery
+	safeWrite := func(name string, strip *piolib.WS2812B, raw []uint32) {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[ANIM safeWrite panic name=%s len=%d] %v\n", name, len(raw), r)
+			}
+		}()
+		if strip != nil && len(raw) > 0 {
+			strip.WriteRaw(raw)
+		}
+	}
 
 	// Eye strip: PIO0 SM0, GP18
 	println("[ANIM] Claiming SM0 for eye strip...")
 	sm0, err := pio.PIO0.ClaimStateMachine()
 	if err != nil {
 		println("[ANIM] ERROR: Failed to claim SM0:", err.Error())
-		// Don't return - continue without eye strip
 	} else {
 		println("[ANIM] SM0 claimed, initializing WS2812B on GP18...")
 		strip1, err = piolib.NewWS2812B(sm0, machine.GP18)
@@ -270,7 +322,6 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 	sm1, err := pio.PIO0.ClaimStateMachine()
 	if err != nil {
 		println("[ANIM] ERROR: Failed to claim SM1:", err.Error())
-		// Don't return - continue without mouth strip
 	} else {
 		println("[ANIM] SM1 claimed, initializing WS2812B on GP12...")
 		strip2, err = piolib.NewWS2812B(sm1, machine.GP12)
@@ -285,6 +336,20 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 	}
 
 	fmt.Printf("[ANIM] PIO init complete: eye=%v mouth=%v\n", eyeOK, mouthOK)
+
+	// Self-test: write black frames to verify strips work
+	println("[ANIM SELFTEST] Testing strips with black frames...")
+	if eyeOK {
+		testFrame := make([]uint32, EyeFrameWidth*EyeFrameHeight)
+		safeWrite("eye-test", strip1, testFrame)
+		println("[ANIM SELFTEST] eye OK")
+	}
+	if mouthOK {
+		testFrame := make([]uint32, MouthFrameWidth*MouthFrameHeight)
+		safeWrite("mouth-test", strip2, testFrame)
+		println("[ANIM SELFTEST] mouth OK")
+	}
+	time.Sleep(100 * time.Millisecond)
 
 	// If both strips failed, blink LED rapidly to indicate error but don't exit
 	if !eyeOK && !mouthOK {
@@ -303,23 +368,39 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 	var queuedEyeAnim *Animation = nil
 	var queuedMouthAnim *Animation = nil
 
-	// Initial setup for currentEyeAnim
+	// Cached pre-converted frames (avoids per-frame allocation)
+	var curEyeRaw [][]uint32
+	var curMouthRaw [][]uint32
+
+	// Initial setup for currentEyeAnim with properly-sized black frame fallback
 	if eyeIdleAnim == nil {
 		if len(LoadedAnimations) > 0 {
 			currentEyeAnim = LoadedAnimations[0]
 		} else {
-			currentEyeAnim = &Animation{FrameCount: 1, Frames: [][]byte{{}}} // Dummy
+			// Properly-sized black frame fallback (not empty!)
+			currentEyeAnim = &Animation{
+				FrameCount: 1,
+				Frames:     [][]byte{make([]byte, EyeFrameWidth*EyeFrameHeight*3)},
+				Name:       "fallback_eye_black",
+			}
 		}
 	} else {
 		currentEyeAnim = eyeIdleAnim
 	}
+	curEyeRaw = preconvert(currentEyeAnim)
 
-	// Initial setup for currentMouthAnim
+	// Initial setup for currentMouthAnim with properly-sized black frame fallback
 	if mouthAnim == nil {
-		currentMouthAnim = &Animation{FrameCount: 1, Frames: [][]byte{{}}}
+		// Properly-sized black frame fallback (not empty!)
+		currentMouthAnim = &Animation{
+			FrameCount: 1,
+			Frames:     [][]byte{make([]byte, MouthFrameWidth*MouthFrameHeight*3)},
+			Name:       "fallback_mouth_black",
+		}
 	} else {
 		currentMouthAnim = mouthAnim
 	}
+	curMouthRaw = preconvert(currentMouthAnim)
 
 	var eyeFrameCounter int64
 	var mouthFrameCounter int64
@@ -332,25 +413,45 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 		case update := <-animChan:
 			if update.Eye != nil {
 				queuedEyeAnim = update.Eye
-				fmt.Printf("[ANIM] Queued eye: %s\n", update.Eye.Name)
+				if debugLog {
+					fmt.Printf("[ANIM] Queued eye: %s\n", update.Eye.Name)
+				}
 			}
 			if update.Mouth != nil {
 				queuedMouthAnim = update.Mouth
-				fmt.Printf("[ANIM] Queued mouth: %s\n", update.Mouth.Name)
+				if debugLog {
+					fmt.Printf("[ANIM] Queued mouth: %s\n", update.Mouth.Name)
+				}
 			}
 		default:
 		}
 
-		// Write to eye strip if available
-		if eyeOK && currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
-			eyeFrame := currentEyeAnim.Frames[eyeFrameCounter%int64(currentEyeAnim.FrameCount)]
-			strip1.WriteRaw(bytesToRaw(eyeFrame))
+		// Write to eye strip if available (using pre-converted cached frames)
+		if eyeOK && curEyeRaw != nil && len(curEyeRaw) > 0 {
+			frameIdx := eyeFrameCounter % int64(len(curEyeRaw))
+			raw := curEyeRaw[frameIdx]
+			// Validate frame size before write
+			expectedPixels := EyeFrameWidth * EyeFrameHeight
+			if len(raw) != expectedPixels {
+				fmt.Printf("[ANIM SKIP eye] len=%d expected=%d name=%s frame=%d\n",
+					len(raw), expectedPixels, currentEyeAnim.Name, frameIdx)
+			} else {
+				safeWrite("eye", strip1, raw)
+			}
 		}
 
-		// Write to mouth strip if available
-		if mouthOK && currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
-			mouthFrame := currentMouthAnim.Frames[mouthFrameCounter%int64(currentMouthAnim.FrameCount)]
-			strip2.WriteRaw(bytesToRaw(mouthFrame))
+		// Write to mouth strip if available (using pre-converted cached frames)
+		if mouthOK && curMouthRaw != nil && len(curMouthRaw) > 0 {
+			frameIdx := mouthFrameCounter % int64(len(curMouthRaw))
+			raw := curMouthRaw[frameIdx]
+			// Validate frame size before write
+			expectedPixels := MouthFrameWidth * MouthFrameHeight
+			if len(raw) != expectedPixels {
+				fmt.Printf("[ANIM SKIP mouth] len=%d expected=%d name=%s frame=%d\n",
+					len(raw), expectedPixels, currentMouthAnim.Name, frameIdx)
+			} else {
+				safeWrite("mouth", strip2, raw)
+			}
 		}
 
 		// PIO handles latch timing internally - no manual reset delay needed
@@ -358,26 +459,37 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 		eyeFrameCounter++
 		mouthFrameCounter++
 
-		// Transition at end of cycle
-		if queuedEyeAnim != nil && currentEyeAnim != nil && eyeFrameCounter > 0 && (eyeFrameCounter%int64(currentEyeAnim.FrameCount) == 0) {
-			if queuedEyeAnim != currentEyeAnim {
-				fmt.Printf("[ANIM] Transitioning Eye to: %s\n", queuedEyeAnim.Name)
-				currentEyeAnim = queuedEyeAnim
-				eyeFrameCounter = 0
+		// Transition eye at end of cycle
+		if queuedEyeAnim != nil && currentEyeAnim != nil && len(curEyeRaw) > 0 {
+			if eyeFrameCounter > 0 && (eyeFrameCounter%int64(len(curEyeRaw)) == 0) {
+				if queuedEyeAnim != currentEyeAnim {
+					if debugLog {
+						fmt.Printf("[ANIM] Transitioning Eye to: %s\n", queuedEyeAnim.Name)
+					}
+					currentEyeAnim = queuedEyeAnim
+					curEyeRaw = preconvert(currentEyeAnim)
+					eyeFrameCounter = 0
+				}
+				queuedEyeAnim = nil
 			}
-			queuedEyeAnim = nil
 		}
 
-		if queuedMouthAnim != nil && currentMouthAnim != nil && mouthFrameCounter > 0 && (mouthFrameCounter%int64(currentMouthAnim.FrameCount) == 0) {
-			if queuedMouthAnim != currentMouthAnim {
-				fmt.Printf("[ANIM] Transitioning Mouth to: %s\n", queuedMouthAnim.Name)
-				currentMouthAnim = queuedMouthAnim
-				mouthFrameCounter = 0
+		// Transition mouth at end of cycle
+		if queuedMouthAnim != nil && currentMouthAnim != nil && len(curMouthRaw) > 0 {
+			if mouthFrameCounter > 0 && (mouthFrameCounter%int64(len(curMouthRaw)) == 0) {
+				if queuedMouthAnim != currentMouthAnim {
+					if debugLog {
+						fmt.Printf("[ANIM] Transitioning Mouth to: %s\n", queuedMouthAnim.Name)
+					}
+					currentMouthAnim = queuedMouthAnim
+					curMouthRaw = preconvert(currentMouthAnim)
+					mouthFrameCounter = 0
+				}
+				queuedMouthAnim = nil
 			}
-			queuedMouthAnim = nil
 		}
 
-		// Yield to allow other goroutines (like UART) to run if needed
-		time.Sleep(10 * time.Millisecond)
+		// ~60Hz frame rate cap (10ms was too fast, produced redundant WriteRaw calls)
+		time.Sleep(16 * time.Millisecond)
 	}
 }

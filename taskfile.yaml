@@ -10,9 +10,12 @@ tasks:
     cmds:
       - |
         mkdir -p build
-        echo "Building {{.ROLE}} ({{.ADDRESS}})"
+        echo "Building {{.ROLE}} ({{.ADDRESS}}) debug={{.DEBUG}}"
+        TAGS=""
+        if [ "{{.DEBUG}}" = "true" ]; then TAGS="-tags=debug"; fi
         tinygo build -o build/{{.ROLE}}-{{.ADDRESS}}.elf -target={{.TINYGO_TARGET}} \
-        -ldflags="-X main.buildRole={{.ROLE}} -X main.buildAddress={{.ADDRESS}}" .
+          $TAGS \
+          -ldflags="-X main.buildRole={{.ROLE}} -X main.buildAddress={{.ADDRESS}}" .
 
   _flash:
     internal: true
@@ -21,8 +24,14 @@ tasks:
         vars:
           ROLE: '{{.ROLE}}'
           ADDRESS: '{{.ADDRESS}}'
-      - tinygo flash -target={{.TINYGO_TARGET}} -ldflags="-X main.buildRole={{.ROLE}} -X main.buildAddress={{.ADDRESS}}" . -monitor
+          DEBUG: '{{.DEBUG}}'
+      - |
+        TAGS=""
+        if [ "{{.DEBUG}}" = "true" ]; then TAGS="-tags=debug"; fi
+        tinygo flash -target={{.TINYGO_TARGET}} $TAGS \
+          -ldflags="-X main.buildRole={{.ROLE}} -X main.buildAddress={{.ADDRESS}}" . -monitor
 
+  # Release builds
   build:dispatcher:
     desc: "Builds dispatcher firmware"
     cmds:
@@ -62,6 +71,47 @@ tasks:
       - task: build:worker-2
       - task: build:worker-3
 
+  # Debug builds (with verbose logging)
+  build:dispatcher:debug:
+    desc: "Builds dispatcher firmware with debug logging"
+    cmds:
+      - task: _build
+        vars: {ROLE: dispatcher, ADDRESS: dispatch, DEBUG: "true"}
+
+  build:worker-0:debug:
+    desc: "Builds worker-0 firmware with debug logging"
+    cmds:
+      - task: _build
+        vars: {ROLE: worker, ADDRESS: worker-0, DEBUG: "true"}
+
+  build:worker-1:debug:
+    desc: "Builds worker-1 firmware with debug logging"
+    cmds:
+      - task: _build
+        vars: {ROLE: worker, ADDRESS: worker-1, DEBUG: "true"}
+
+  build:worker-2:debug:
+    desc: "Builds worker-2 firmware with debug logging"
+    cmds:
+      - task: _build
+        vars: {ROLE: worker, ADDRESS: worker-2, DEBUG: "true"}
+
+  build:worker-3:debug:
+    desc: "Builds worker-3 firmware with debug logging"
+    cmds:
+      - task: _build
+        vars: {ROLE: worker, ADDRESS: worker-3, DEBUG: "true"}
+
+  build:all:debug:
+    desc: "Builds all firmwares with debug logging"
+    cmds:
+      - task: build:dispatcher:debug
+      - task: build:worker-0:debug
+      - task: build:worker-1:debug
+      - task: build:worker-2:debug
+      - task: build:worker-3:debug
+
+  # Flash tasks (release)
   flash:dispatcher:
     desc: "Flashes dispatcher firmware"
     cmds:
@@ -92,11 +142,42 @@ tasks:
       - task: _flash
         vars: {ROLE: worker, ADDRESS: worker-3}
 
+  # Flash tasks (debug)
+  flash:dispatcher:debug:
+    desc: "Flashes dispatcher firmware with debug logging"
+    cmds:
+      - task: _flash
+        vars: {ROLE: dispatcher, ADDRESS: dispatch, DEBUG: "true"}
+
+  flash:worker-0:debug:
+    desc: "Flashes worker-0 firmware with debug logging"
+    cmds:
+      - task: _flash
+        vars: {ROLE: worker, ADDRESS: worker-0, DEBUG: "true"}
+
+  flash:worker-1:debug:
+    desc: "Flashes worker-1 firmware with debug logging"
+    cmds:
+      - task: _flash
+        vars: {ROLE: worker, ADDRESS: worker-1, DEBUG: "true"}
+
+  flash:worker-2:debug:
+    desc: "Flashes worker-2 firmware with debug logging"
+    cmds:
+      - task: _flash
+        vars: {ROLE: worker, ADDRESS: worker-2, DEBUG: "true"}
+
+  flash:worker-3:debug:
+    desc: "Flashes worker-3 firmware with debug logging"
+    cmds:
+      - task: _flash
+        vars: {ROLE: worker, ADDRESS: worker-3, DEBUG: "true"}
+
   monitor:
     desc: "Attach Monitor to connected pi"
     cmds:
       - tinygo monitor
-    
+
   compile_anims:
     desc: "Compile all animations using the settings in anims.yaml"
     cmds:

@@ -27,6 +27,7 @@ const (
 	Cmd_LedOn               // 0x01
 	Cmd_LedOff              // 0x02
 	Cmd_DisplayAnim         // 0x03
+	Cmd_Ping                // 0x04
 )
 
 type AnimationID int
