@@ -161,6 +161,8 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 								ledState = false
 							case Cmd_NoOp:
 								// NoOp - just keeps watchdog happy via packet receipt
+								machine.Watchdog.Update()
+								println("[NoOp Watchdog Update] -> Pubby Habby *woof*")
 							case Cmd_Ping:
 								println("[PING from dispatcher]")
 							case Cmd_DisplayAnim:

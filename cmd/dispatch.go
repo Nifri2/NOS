@@ -170,7 +170,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			workers := []Address{Worker_0, Worker_1}
 
 			// 1. Random Sleep
-			sleepTime := 2000 + r.Intn(4001)
+			sleepTime := 3000 + r.Intn(10)
 			if m, changed := sleepWithInterrupt(sleepTime); changed {
 				currentMode = m
 				println("Mode Change ->", m)
