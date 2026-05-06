@@ -80,14 +80,14 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Current State
 	var currentMode byte = 0x00
 
-	// Helper to send UART packet via channel
+	// Helper to send UART packet via channel (zero allocation in hot path)
 	sendPacket := func(addr Address, cmd Command, eye, mouth AnimationID) {
 		header := byte(0xAA)
 		a := byte(addr)
 		c := byte(cmd)
 		e := byte(eye)
 		m := byte(mouth)
-		checksum := Crc8([]byte{a, c, e, m})
+		checksum := Crc8Bytes4(a, c, e, m)
 
 		select {
 		case uartChan <- [6]byte{header, a, c, e, m, checksum}:

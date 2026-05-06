@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"machine"
+	"runtime"
 	"time"
 
 	pio "github.com/tinygo-org/pio/rp2-pio"
@@ -51,10 +52,20 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	fmt.Printf("[%d] displayAnimation goroutine started\n", Ts())
 
 	// Watchdog logging goroutine - proves scheduler is alive even if other goroutines freeze
+	// Also logs heap stats every 30s to monitor GC pressure
 	go func() {
+		var tick int
+		var ms runtime.MemStats
 		for {
 			time.Sleep(5 * time.Second)
+			tick++
 			fmt.Printf("[%d] [WD] alive\n", Ts())
+			// Log heap stats every 30s (every 6th tick)
+			if tick%6 == 0 {
+				runtime.ReadMemStats(&ms)
+				fmt.Printf("[%d] [MEM] alloc=%d totalAlloc=%d sys=%d\n",
+					Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
+			}
 		}
 	}()
 
@@ -123,10 +134,6 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 			rxBytes++
 			lastByteTime = now
 
-			if debugLog {
-				fmt.Printf("[%d] [RX] byte=%02X bufIdx=%d\n", Ts(), b, bufIdx)
-			}
-
 			// State machine-ish logic
 			if bufIdx == 0 {
 				// Waiting for Header
@@ -171,7 +178,6 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 							case Cmd_NoOp:
 								// NoOp - just keeps watchdog happy via packet receipt
 								machine.Watchdog.Update()
-								fmt.Printf("[%d] [NoOp Watchdog Update] -> Pubby Habby *woof*\n", Ts())
 							case Cmd_Ping:
 								fmt.Printf("[%d] [PING from dispatcher]\n", Ts())
 							case Cmd_DisplayAnim:
@@ -285,18 +291,6 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	eyeOK := false
 	mouthOK := false
 
-	// safeWrite wraps WriteRaw with panic recovery
-	safeWrite := func(name string, strip *piolib.WS2812B, raw []uint32) {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Printf("[%d] [ANIM safeWrite panic name=%s len=%d] %v\n", Ts(), name, len(raw), r)
-			}
-		}()
-		if strip != nil && len(raw) > 0 {
-			strip.WriteRaw(raw)
-		}
-	}
-
 	// Eye strip: PIO0 SM0, GP18
 	fmt.Printf("[%d] [ANIM] Claiming SM0 for eye strip...\n", Ts())
 	sm0, err := pio.PIO0.ClaimStateMachine()
@@ -345,12 +339,12 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	fmt.Printf("[%d] [ANIM SELFTEST] Testing strips with black frames...\n", Ts())
 	if eyeOK {
 		testFrame := make([]uint32, EyeFrameWidth*EyeFrameHeight)
-		safeWrite("eye-test", strip1, testFrame)
+		strip1.WriteRaw(testFrame)
 		fmt.Printf("[%d] [ANIM SELFTEST] eye OK\n", Ts())
 	}
 	if mouthOK {
 		testFrame := make([]uint32, MouthFrameWidth*MouthFrameHeight)
-		safeWrite("mouth-test", strip2, testFrame)
+		strip2.WriteRaw(testFrame)
 		fmt.Printf("[%d] [ANIM SELFTEST] mouth OK\n", Ts())
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -420,7 +414,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	var loopIter int64
 	for {
 		loopIter++
-		if loopIter%100 == 0 {
+		if debugLog && loopIter%100 == 0 {
 			fmt.Printf("[%d] [ANIM LOOP] iter=%d eyeFrame=%d mouthFrame=%d\n",
 				Ts(), loopIter, eyeFrameCounter, mouthFrameCounter)
 		}
@@ -448,13 +442,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 			frameBytes := currentEyeAnim.Frames[frameIdx]
 			if len(frameBytes)/3 == EyeFrameWidth*EyeFrameHeight {
 				bytesToRawInto(eyeBuffer, frameBytes)
-				if debugLog {
-					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "eye", len(eyeBuffer))
-				}
-				safeWrite("eye", strip1, eyeBuffer)
-				if debugLog {
-					fmt.Printf("[%d] [WR<] %s\n", Ts(), "eye")
-				}
+				strip1.WriteRaw(eyeBuffer)
 			} else {
 				fmt.Printf("[%d] [ANIM SKIP eye] pixels=%d expected=%d name=%s frame=%d\n",
 					Ts(), len(frameBytes)/3, EyeFrameWidth*EyeFrameHeight, currentEyeAnim.Name, frameIdx)
@@ -467,13 +455,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 			frameBytes := currentMouthAnim.Frames[frameIdx]
 			if len(frameBytes)/3 == MouthFrameWidth*MouthFrameHeight {
 				bytesToRawInto(mouthBuffer, frameBytes)
-				if debugLog {
-					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "mouth", len(mouthBuffer))
-				}
-				safeWrite("mouth", strip2, mouthBuffer)
-				if debugLog {
-					fmt.Printf("[%d] [WR<] %s\n", Ts(), "mouth")
-				}
+				strip2.WriteRaw(mouthBuffer)
 			} else {
 				fmt.Printf("[%d] [ANIM SKIP mouth] pixels=%d expected=%d name=%s frame=%d\n",
 					Ts(), len(frameBytes)/3, MouthFrameWidth*MouthFrameHeight, currentMouthAnim.Name, frameIdx)

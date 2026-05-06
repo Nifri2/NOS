@@ -145,6 +145,41 @@ Each worker uses two PIO state machines from PIO0:
 - **SM0**: Eye strip (256 LEDs on GP18)
 - **SM1**: Mouth strip (512 LEDs on GP12)
 
+## Memory Management
+
+The RP2350 has only 520 KB of RAM. To avoid GC-induced freezes, the animation loop uses a **zero-allocation hot path**:
+
+| Component | Strategy |
+|-----------|----------|
+| Frame buffers | Fixed `[]uint32` allocated once at init (eyeBuffer=1KB, mouthBuffer=2KB) |
+| Frame conversion | `bytesToRawInto()` writes directly into fixed buffer, no slice allocation |
+| Animation transitions | Pointer swap only, no preconversion or caching |
+| CRC checksums | `Crc8Bytes4()` takes 4 bytes directly, no slice allocation |
+| WriteRaw calls | Direct PIO writes, no closure/defer overhead |
+
+### Monitoring
+
+The watchdog goroutine logs heap stats every 30 seconds:
+```
+[MEM] alloc=12345 totalAlloc=67890 sys=524288
+```
+
+- `alloc`: Currently allocated heap bytes (should stay flat in steady state)
+- `totalAlloc`: Cumulative bytes allocated (grows slowly = healthy)
+- `sys`: Total memory obtained from OS
+
+### Canary Goroutines
+
+Multiple goroutines prove the system is alive:
+
+| Log | Interval | Purpose |
+|-----|----------|---------|
+| `[WD] alive` | 5s | Watchdog goroutine is running |
+| `[ANIM TICK]` | 2s | Animation goroutine is running |
+| `[HB]` | 10s | UART loop is running |
+
+If any canary stops ticking, that goroutine has stalled (likely GC or panic).
+
 ## Requirements
 
 - [TinyGo](https://tinygo.org/) - Go compiler for embedded systems

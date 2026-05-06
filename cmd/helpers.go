@@ -50,6 +50,15 @@ func Crc8(data []byte) byte {
 	return crc
 }
 
+// Crc8Bytes4 computes CRC-8/MAXIM checksum for exactly 4 bytes (zero allocation)
+func Crc8Bytes4(a, b, c, d byte) byte {
+	crc := crc8Table[a]
+	crc = crc8Table[crc^b]
+	crc = crc8Table[crc^c]
+	crc = crc8Table[crc^d]
+	return crc
+}
+
 func LoadAnimation(data []byte, width, height int, name string) (*Animation, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("data too short")
