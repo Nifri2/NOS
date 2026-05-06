@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"machine"
-	"runtime"
 	"time"
 
 	pio "github.com/tinygo-org/pio/rp2-pio"
@@ -233,7 +232,6 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 						led.Low()
 						time.Sleep(50 * time.Millisecond)
 					}
-					runtime.GC() // Reduce odds of allocator state corruption
 					time.Sleep(time.Second)
 				}
 			}()
@@ -267,30 +265,18 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 
 	fmt.Printf("[%d] [ANIM] Found eye_idle=%v mouth_idle=%v\n", Ts(), eyeIdleAnim != nil, mouthAnim != nil)
 
-	// Helper to convert []byte (G,R,B triplets) to []uint32 for PIO WS2812
-	// Color format: uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
-	bytesToRaw := func(data []byte) []uint32 {
-		pixelCount := len(data) / 3
-		raw := make([]uint32, pixelCount)
-		for i := 0; i < pixelCount; i++ {
-			g := data[i*3]
-			r := data[i*3+1]
-			b := data[i*3+2]
-			raw[i] = uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
+	// bytesToRawInto converts GRB bytes into dst buffer (zero allocation)
+	bytesToRawInto := func(dst []uint32, src []byte) {
+		n := len(src) / 3
+		if n > len(dst) {
+			n = len(dst)
 		}
-		return raw
-	}
-
-	// Helper to pre-convert all frames of an animation
-	preconvert := func(anim *Animation) [][]uint32 {
-		if anim == nil || len(anim.Frames) == 0 {
-			return nil
+		for i := 0; i < n; i++ {
+			g := src[i*3]
+			r := src[i*3+1]
+			b := src[i*3+2]
+			dst[i] = uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
 		}
-		result := make([][]uint32, len(anim.Frames))
-		for i, f := range anim.Frames {
-			result[i] = bytesToRaw(f)
-		}
-		return result
 	}
 
 	// PIO-based WS2812 - immune to UART interrupts
@@ -349,6 +335,12 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 
 	fmt.Printf("[%d] [ANIM] PIO init complete: eye=%v mouth=%v\n", Ts(), eyeOK, mouthOK)
 
+	// Fixed rendering buffers - allocated once, reused forever
+	eyeBuffer := make([]uint32, EyeFrameWidth*EyeFrameHeight)     // 256 pixels
+	mouthBuffer := make([]uint32, MouthFrameWidth*MouthFrameHeight) // 512 pixels
+	fmt.Printf("[%d] [ANIM] eyeBuffer=%d mouthBuffer=%d totalRAM=%d bytes\n",
+		Ts(), len(eyeBuffer), len(mouthBuffer), (len(eyeBuffer)+len(mouthBuffer))*4)
+
 	// Self-test: write black frames to verify strips work
 	fmt.Printf("[%d] [ANIM SELFTEST] Testing strips with black frames...\n", Ts())
 	if eyeOK {
@@ -380,10 +372,6 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	var queuedEyeAnim *Animation = nil
 	var queuedMouthAnim *Animation = nil
 
-	// Cached pre-converted frames (avoids per-frame allocation)
-	var curEyeRaw [][]uint32
-	var curMouthRaw [][]uint32
-
 	// Initial setup for currentEyeAnim with properly-sized black frame fallback
 	if eyeIdleAnim == nil {
 		if len(LoadedAnimations) > 0 {
@@ -399,9 +387,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	} else {
 		currentEyeAnim = eyeIdleAnim
 	}
-	fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), currentEyeAnim.Name, len(currentEyeAnim.Frames))
-	curEyeRaw = preconvert(currentEyeAnim)
-	fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentEyeAnim.Name, len(curEyeRaw[0]), len(currentEyeAnim.Frames)*len(curEyeRaw[0])*4)
+	fmt.Printf("[%d] [ANIM] Initial eye: %s frames=%d\n", Ts(), currentEyeAnim.Name, len(currentEyeAnim.Frames))
 
 	// Initial setup for currentMouthAnim with properly-sized black frame fallback
 	if mouthAnim == nil {
@@ -414,9 +400,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	} else {
 		currentMouthAnim = mouthAnim
 	}
-	fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), currentMouthAnim.Name, len(currentMouthAnim.Frames))
-	curMouthRaw = preconvert(currentMouthAnim)
-	fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentMouthAnim.Name, len(curMouthRaw[0]), len(currentMouthAnim.Frames)*len(curMouthRaw[0])*4)
+	fmt.Printf("[%d] [ANIM] Initial mouth: %s frames=%d\n", Ts(), currentMouthAnim.Name, len(currentMouthAnim.Frames))
 
 	var eyeFrameCounter int64
 	var mouthFrameCounter int64
@@ -458,43 +442,41 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 		default:
 		}
 
-		// Write to eye strip if available (using pre-converted cached frames)
-		if eyeOK && curEyeRaw != nil && len(curEyeRaw) > 0 {
-			frameIdx := eyeFrameCounter % int64(len(curEyeRaw))
-			raw := curEyeRaw[frameIdx]
-			// Validate frame size before write
-			expectedPixels := EyeFrameWidth * EyeFrameHeight
-			if len(raw) != expectedPixels {
-				fmt.Printf("[%d] [ANIM SKIP eye] len=%d expected=%d name=%s frame=%d\n",
-					Ts(), len(raw), expectedPixels, currentEyeAnim.Name, frameIdx)
-			} else {
+		// Write to eye strip if available (convert on demand into fixed buffer)
+		if eyeOK && currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
+			frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
+			frameBytes := currentEyeAnim.Frames[frameIdx]
+			if len(frameBytes)/3 == EyeFrameWidth*EyeFrameHeight {
+				bytesToRawInto(eyeBuffer, frameBytes)
 				if debugLog {
-					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "eye", len(raw))
+					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "eye", len(eyeBuffer))
 				}
-				safeWrite("eye", strip1, raw)
+				safeWrite("eye", strip1, eyeBuffer)
 				if debugLog {
 					fmt.Printf("[%d] [WR<] %s\n", Ts(), "eye")
 				}
+			} else {
+				fmt.Printf("[%d] [ANIM SKIP eye] pixels=%d expected=%d name=%s frame=%d\n",
+					Ts(), len(frameBytes)/3, EyeFrameWidth*EyeFrameHeight, currentEyeAnim.Name, frameIdx)
 			}
 		}
 
-		// Write to mouth strip if available (using pre-converted cached frames)
-		if mouthOK && curMouthRaw != nil && len(curMouthRaw) > 0 {
-			frameIdx := mouthFrameCounter % int64(len(curMouthRaw))
-			raw := curMouthRaw[frameIdx]
-			// Validate frame size before write
-			expectedPixels := MouthFrameWidth * MouthFrameHeight
-			if len(raw) != expectedPixels {
-				fmt.Printf("[%d] [ANIM SKIP mouth] len=%d expected=%d name=%s frame=%d\n",
-					Ts(), len(raw), expectedPixels, currentMouthAnim.Name, frameIdx)
-			} else {
+		// Write to mouth strip if available (convert on demand into fixed buffer)
+		if mouthOK && currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
+			frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
+			frameBytes := currentMouthAnim.Frames[frameIdx]
+			if len(frameBytes)/3 == MouthFrameWidth*MouthFrameHeight {
+				bytesToRawInto(mouthBuffer, frameBytes)
 				if debugLog {
-					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "mouth", len(raw))
+					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "mouth", len(mouthBuffer))
 				}
-				safeWrite("mouth", strip2, raw)
+				safeWrite("mouth", strip2, mouthBuffer)
 				if debugLog {
 					fmt.Printf("[%d] [WR<] %s\n", Ts(), "mouth")
 				}
+			} else {
+				fmt.Printf("[%d] [ANIM SKIP mouth] pixels=%d expected=%d name=%s frame=%d\n",
+					Ts(), len(frameBytes)/3, MouthFrameWidth*MouthFrameHeight, currentMouthAnim.Name, frameIdx)
 			}
 		}
 
@@ -504,16 +486,13 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 		mouthFrameCounter++
 
 		// Transition eye at end of cycle
-		if queuedEyeAnim != nil && currentEyeAnim != nil && len(curEyeRaw) > 0 {
-			if eyeFrameCounter > 0 && (eyeFrameCounter%int64(len(curEyeRaw)) == 0) {
+		if queuedEyeAnim != nil && currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
+			if eyeFrameCounter > 0 && (eyeFrameCounter%int64(len(currentEyeAnim.Frames)) == 0) {
 				if queuedEyeAnim != currentEyeAnim {
 					if debugLog {
 						fmt.Printf("[%d] [ANIM] Transitioning Eye to: %s\n", Ts(), queuedEyeAnim.Name)
 					}
 					currentEyeAnim = queuedEyeAnim
-					fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), queuedEyeAnim.Name, len(queuedEyeAnim.Frames))
-					curEyeRaw = preconvert(currentEyeAnim)
-					fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentEyeAnim.Name, len(curEyeRaw[0]), len(currentEyeAnim.Frames)*len(curEyeRaw[0])*4)
 					eyeFrameCounter = 0
 				}
 				queuedEyeAnim = nil
@@ -521,16 +500,13 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 		}
 
 		// Transition mouth at end of cycle
-		if queuedMouthAnim != nil && currentMouthAnim != nil && len(curMouthRaw) > 0 {
-			if mouthFrameCounter > 0 && (mouthFrameCounter%int64(len(curMouthRaw)) == 0) {
+		if queuedMouthAnim != nil && currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
+			if mouthFrameCounter > 0 && (mouthFrameCounter%int64(len(currentMouthAnim.Frames)) == 0) {
 				if queuedMouthAnim != currentMouthAnim {
 					if debugLog {
 						fmt.Printf("[%d] [ANIM] Transitioning Mouth to: %s\n", Ts(), queuedMouthAnim.Name)
 					}
 					currentMouthAnim = queuedMouthAnim
-					fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), queuedMouthAnim.Name, len(queuedMouthAnim.Frames))
-					curMouthRaw = preconvert(currentMouthAnim)
-					fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentMouthAnim.Name, len(curMouthRaw[0]), len(currentMouthAnim.Frames)*len(curMouthRaw[0])*4)
 					mouthFrameCounter = 0
 				}
 				queuedMouthAnim = nil
