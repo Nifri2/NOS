@@ -32,10 +32,10 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 	println("Starting Dispatcher Loop")
 
-	// Configure Watchdog (5s timeout)
-	println("Configuring watchdog (5s timeout)...")
-	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 5000})
-	println("Watchdog configured")
+	// Configure Watchdog (8s timeout)
+	println("Configuring watchdog (8s timeout)...")
+	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 8000})
+	println("[DISP] Watchdog timeout: 8000ms")
 
 	// Radio Channel
 	radioChan := make(chan byte, 10)
@@ -101,32 +101,33 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Keepalive Goroutine - broadcast to all workers
 	go func() {
 		for {
-			time.Sleep(5 * time.Second)
+			time.Sleep(2 * time.Second)
 			// Single broadcast packet reaches all workers
 			sendPacket(Address_All, Cmd_NoOp, Anim_EyeIdle, Anim_MouthIdle)
 		}
 	}()
 
-	// Helper for interruptible sleep
+	// Helper for interruptible sleep that feeds watchdog during long sleeps
+	// Sleeps in 1-second chunks, calling Watchdog.Update() between chunks
 	// Returns (newMode, true) if interrupted
 	// Returns (0, false) if completed
 	sleepWithInterrupt := func(ms int) (byte, bool) {
-		// Check immediately before sleeping
-		select {
-		case code := <-radioChan:
-			radioEvents++
-			return code, true
-		default:
+		remaining := ms
+		for remaining > 0 {
+			chunk := remaining
+			if chunk > 1000 {
+				chunk = 1000
+			}
+			select {
+			case code := <-radioChan:
+				radioEvents++
+				return code, true
+			case <-time.After(time.Duration(chunk) * time.Millisecond):
+			}
+			machine.Watchdog.Update()
+			remaining -= chunk
 		}
-
-		// Sleep
-		select {
-		case code := <-radioChan:
-			radioEvents++
-			return code, true
-		case <-time.After(time.Duration(ms) * time.Millisecond):
-			return 0, false
-		}
+		return 0, false
 	}
 
 	// Initialize RNG
@@ -171,6 +172,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 			// 1. Random Sleep
 			sleepTime := 3000 + r.Intn(10)
+			if debugLog {
+				fmt.Printf("[MODE 0x00] sleep=%dms\n", sleepTime)
+			}
 			if m, changed := sleepWithInterrupt(sleepTime); changed {
 				currentMode = m
 				println("Mode Change ->", m)
@@ -196,6 +200,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		case 0x10: // Insignia Spinny (Worker 2)
 			sendPacket(Worker_2, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
+
+			// Feed watchdog before sleep
+			machine.Watchdog.Update()
 
 			// Just wait and check for interrupt
 			if m, changed := sleepWithInterrupt(500); changed {

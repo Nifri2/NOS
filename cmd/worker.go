@@ -77,6 +77,8 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 		// ============================================================
 		// PHASE D: 1Hz LED heartbeat - proves loop is running
 		// Uses time.Since() for robustness against loop timing changes
+		// The 1Hz LED heartbeat is the primary watchdog feed for workers.
+		// This ensures watchdog is fed even if no UART packets arrive.
 		// ============================================================
 		if time.Since(lastLedToggle) >= time.Second {
 			ledState = !ledState
