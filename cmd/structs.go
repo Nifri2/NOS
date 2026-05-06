@@ -1,5 +1,12 @@
 package cmd
 
+import "time"
+
+var bootTime = time.Now()
+
+// Ts returns milliseconds since boot for log timestamps
+func Ts() int64 { return time.Since(bootTime).Milliseconds() }
+
 type Role int
 
 const (

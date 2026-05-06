@@ -142,7 +142,7 @@ func main() {
 
 		// USB warmup delay - let USB-CDC enumerate before serial output
 		time.Sleep(2 * time.Second)
-		println("BOOT main: role=worker addr=", buildAddress)
+		fmt.Printf("[%d] BOOT main: role=worker addr=%s\n", cmd.Ts(), buildAddress)
 		time.Sleep(500 * time.Millisecond) // let terminal attach
 	}
 

@@ -23,19 +23,19 @@ var Radio_Pins = []machine.Pin{Radio_Pin_0, Radio_Pin_1, Radio_Pin_2, Radio_Pin_
 func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Startup banner 3x with 200ms gaps (matches worker pattern)
 	for i := 0; i < 3; i++ {
-		println("========================================")
-		fmt.Printf("RunDispatcher ENTERED - addr=%d\n", int(config.Address))
-		println("UART: 38400 baud, TX=GP0, RX=GP1")
-		println("========================================")
+		fmt.Printf("[%d] ========================================\n", Ts())
+		fmt.Printf("[%d] RunDispatcher ENTERED - addr=%d\n", Ts(), int(config.Address))
+		fmt.Printf("[%d] UART: 38400 baud, TX=GP0, RX=GP1\n", Ts())
+		fmt.Printf("[%d] ========================================\n", Ts())
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	println("Starting Dispatcher Loop")
+	fmt.Printf("[%d] Starting Dispatcher Loop\n", Ts())
 
 	// Configure Watchdog (8s timeout)
-	println("Configuring watchdog (8s timeout)...")
+	fmt.Printf("[%d] Configuring watchdog (8s timeout)...\n", Ts())
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 8000})
-	println("[DISP] Watchdog timeout: 8000ms")
+	fmt.Printf("[%d] [DISP] Watchdog timeout: 8000ms\n", Ts())
 
 	// Radio Channel
 	radioChan := make(chan byte, 10)
@@ -58,7 +58,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						fmt.Printf("[UART WRITER PANIC] %v\n", r)
+						fmt.Printf("[%d] [UART WRITER PANIC] %v\n", Ts(), r)
 						time.Sleep(time.Second)
 					}
 				}()
@@ -66,11 +66,11 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 					uart.Write(packet[:])
 					txWritten++
 					if debugLog {
-						println("TX -> Addr:", packet[1], "Cmd:", packet[2])
+						fmt.Printf("[%d] TX -> Addr: %d Cmd: %d\n", Ts(), packet[1], packet[2])
 					}
 				}
 			}()
-			println("[UART WRITER] Restarting...")
+			fmt.Printf("[%d] [UART WRITER] Restarting...\n", Ts())
 		}
 	}()
 
@@ -94,7 +94,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			txQueued++
 		default:
 			txDropped++
-			println("[WARN] UART Queue Full!")
+			fmt.Printf("[%d] [WARN] UART Queue Full!\n", Ts())
 		}
 	}
 
@@ -138,7 +138,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	lastHeartbeat := time.Now()
 	ledState := false
 
-	println("Entering main dispatcher loop...")
+	fmt.Printf("[%d] Entering main dispatcher loop...\n", Ts())
 
 	// TODO: Send Cmd_Ping to Address_All on a chosen radio input for liveness check
 
@@ -158,8 +158,8 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		// Heartbeat log every 10 seconds with counters
 		if time.Since(lastHeartbeat) >= 10*time.Second {
-			fmt.Printf("[HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d mode=0x%02X\n",
-				txQueued, txWritten, txDropped, radioEvents, currentMode)
+			fmt.Printf("[%d] [HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d mode=0x%02X\n",
+				Ts(), txQueued, txWritten, txDropped, radioEvents, currentMode)
 			machine.Watchdog.Update()
 			lastHeartbeat = now
 		}
@@ -173,11 +173,11 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			// 1. Random Sleep
 			sleepTime := 3000 + r.Intn(10)
 			if debugLog {
-				fmt.Printf("[MODE 0x00] sleep=%dms\n", sleepTime)
+				fmt.Printf("[%d] [MODE 0x00] sleep=%dms\n", Ts(), sleepTime)
 			}
 			if m, changed := sleepWithInterrupt(sleepTime); changed {
 				currentMode = m
-				println("Mode Change ->", m)
+				fmt.Printf("[%d] Mode Change -> %d\n", Ts(), m)
 				continue
 			}
 
@@ -189,7 +189,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			// 3. Blink Duration
 			if m, changed := sleepWithInterrupt(200); changed {
 				currentMode = m
-				println("Mode Change ->", m)
+				fmt.Printf("[%d] Mode Change -> %d\n", Ts(), m)
 				continue
 			}
 
@@ -207,12 +207,12 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			// Just wait and check for interrupt
 			if m, changed := sleepWithInterrupt(500); changed {
 				currentMode = m
-				println("Mode Change ->", m)
+				fmt.Printf("[%d] Mode Change -> %d\n", Ts(), m)
 				continue
 			}
 
 		default:
-			println("Unknown Mode, resetting to 0x00")
+			fmt.Printf("[%d] Unknown Mode, resetting to 0x00\n", Ts())
 			currentMode = 0x00
 		}
 	}
@@ -224,13 +224,13 @@ func runRadioLogic(out chan byte) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[RADIO PANIC] %v\n", r)
+					fmt.Printf("[%d] [RADIO PANIC] %v\n", Ts(), r)
 					time.Sleep(time.Second)
 				}
 			}()
 			runRadioLogicLoop(out)
 		}()
-		println("[RADIO] Restarting radio logic...")
+		fmt.Printf("[%d] [RADIO] Restarting radio logic...\n", Ts())
 	}
 }
 
@@ -291,10 +291,10 @@ func runRadioLogicLoop(out chan byte) {
 		select {
 		case out <- result:
 			if debugLog {
-				println("Radio ->", result)
+				fmt.Printf("[%d] Radio -> %d\n", Ts(), result)
 			}
 		default:
-			println("[WARN] Radio channel full, dropping input")
+			fmt.Printf("[%d] [WARN] Radio channel full, dropping input\n", Ts())
 		}
 	}
 }

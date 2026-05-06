@@ -33,23 +33,31 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 
 	// Print banner 3 times with gaps - some may land even if USB slow
 	for i := 0; i < 3; i++ {
-		println("========================================")
-		println("RunWorker ENTERED - addr=", int(config.Address))
-		println("========================================")
+		fmt.Printf("[%d] ========================================\n", Ts())
+		fmt.Printf("[%d] RunWorker ENTERED - addr=%d\n", Ts(), int(config.Address))
+		fmt.Printf("[%d] ========================================\n", Ts())
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Now configure watchdog
-	println("Configuring watchdog (5s timeout)...")
+	fmt.Printf("[%d] Configuring watchdog (5s timeout)...\n", Ts())
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 5000})
-	println("Watchdog configured")
+	fmt.Printf("[%d] Watchdog configured\n", Ts())
 
 	animChan := make(chan animUpdate, 1)
 
 	// Start animation routine in background
-	println("Starting displayAnimation goroutine...")
+	fmt.Printf("[%d] Starting displayAnimation goroutine...\n", Ts())
 	go displayAnimation(animChan, led)
-	println("displayAnimation goroutine started")
+	fmt.Printf("[%d] displayAnimation goroutine started\n", Ts())
+
+	// Watchdog logging goroutine - proves scheduler is alive even if other goroutines freeze
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			fmt.Printf("[%d] [WD] alive\n", Ts())
+		}
+	}()
 
 	const (
 		HeaderByte = 0xAA
@@ -69,7 +77,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	lastLedToggle := time.Now()
 	ledState := false
 
-	println("Entering main UART loop...")
+	fmt.Printf("[%d] Entering main UART loop...\n", Ts())
 
 	for {
 		now := time.Now()
@@ -93,21 +101,21 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 
 		// Heartbeat log every 10 seconds
 		if time.Since(lastHeartbeat) >= 10*time.Second {
-			fmt.Printf("[HB] rxBytes=%d rxPackets=%d bufIdx=%d\n", rxBytes, rxPackets, bufIdx)
+			fmt.Printf("[%d] [HB] rxBytes=%d rxPackets=%d bufIdx=%d\n", Ts(), rxBytes, rxPackets, bufIdx)
 			lastHeartbeat = now
 		}
 
 		// Inter-byte timeout: reset buffer if >20ms since last byte
 		if bufIdx > 0 && time.Since(lastByteTime) > 20*time.Millisecond {
 			// Dump partial buffer for debugging
-			fmt.Printf("[TIMEOUT] bufIdx=%d partial=[", bufIdx)
+			fmt.Printf("[%d] [TIMEOUT] bufIdx=%d partial=[", Ts(), bufIdx)
 			for i := 0; i < bufIdx; i++ {
 				fmt.Printf("%02X", buf[i])
 				if i < bufIdx-1 {
 					print(" ")
 				}
 			}
-			println("]")
+			fmt.Printf("]\n")
 			bufIdx = 0
 		}
 
@@ -117,7 +125,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 			lastByteTime = now
 
 			if debugLog {
-				fmt.Printf("[RX] byte=%02X bufIdx=%d\n", b, bufIdx)
+				fmt.Printf("[%d] [RX] byte=%02X bufIdx=%d\n", Ts(), b, bufIdx)
 			}
 
 			// State machine-ish logic
@@ -147,8 +155,8 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 						// Valid packet
 						rxPackets++
 						if debugLog {
-							fmt.Printf("[PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
-								rxPackets, addrByte, cmdByte, eyeByte, mouthByte)
+							fmt.Printf("[%d] [PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
+								Ts(), rxPackets, addrByte, cmdByte, eyeByte, mouthByte)
 						}
 
 						// Accept if addressed to us or broadcast
@@ -164,9 +172,9 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 							case Cmd_NoOp:
 								// NoOp - just keeps watchdog happy via packet receipt
 								machine.Watchdog.Update()
-								println("[NoOp Watchdog Update] -> Pubby Habby *woof*")
+								fmt.Printf("[%d] [NoOp Watchdog Update] -> Pubby Habby *woof*\n", Ts())
 							case Cmd_Ping:
-								println("[PING from dispatcher]")
+								fmt.Printf("[%d] [PING from dispatcher]\n", Ts())
 							case Cmd_DisplayAnim:
 								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
 								mouthIdx := MapAnimation(config.Address, AnimationID(mouthByte))
@@ -183,21 +191,21 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 									select {
 									case animChan <- update:
 									default:
-										println("[WARN] animChan full, dropping update")
+										fmt.Printf("[%d] [WARN] animChan full, dropping update\n", Ts())
 									}
 								}
 							}
 						}
 					} else {
 						// CRC fail - dump full packet for debugging
-						fmt.Printf("[CRC FAIL] calc=%02X recv=%02X pkt=[", calculatedChecksum, checksumByte)
+						fmt.Printf("[%d] [CRC FAIL] calc=%02X recv=%02X pkt=[", Ts(), calculatedChecksum, checksumByte)
 						for i := 0; i < PacketSize; i++ {
 							fmt.Printf("%02X", buf[i])
 							if i < PacketSize-1 {
 								print(" ")
 							}
 						}
-						println("]")
+						fmt.Printf("]\n")
 					}
 
 					// Reset buffer
@@ -217,7 +225,7 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[ANIM PANIC] %v\n", r)
+					fmt.Printf("[%d] [ANIM PANIC] %v\n", Ts(), r)
 					// Blink LED rapidly to signal panic
 					for i := 0; i < 10; i++ {
 						led.High()
@@ -231,18 +239,18 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 			}()
 			displayAnimationLoop(animChan, led)
 		}()
-		println("[ANIM] Restarting animation loop...")
+		fmt.Printf("[%d] [ANIM] Restarting animation loop...\n", Ts())
 	}
 }
 
 // displayAnimationLoop is the actual animation rendering logic
 func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
-	println("[ANIM] displayAnimation started, waiting 2s for board stabilization...")
+	fmt.Printf("[%d] [ANIM] displayAnimation started, waiting 2s for board stabilization...\n", Ts())
 
 	// Wait for the board to stabilize
 	time.Sleep(2 * time.Second)
 
-	println("[ANIM] Stabilization complete, initializing...")
+	fmt.Printf("[%d] [ANIM] Stabilization complete, initializing...\n", Ts())
 
 	// Helper to find animation by name
 	findAnim := func(name string) *Animation {
@@ -257,7 +265,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	eyeIdleAnim := findAnim("eye_idle")
 	mouthAnim := findAnim("mouth_idle")
 
-	fmt.Printf("[ANIM] Found eye_idle=%v mouth_idle=%v\n", eyeIdleAnim != nil, mouthAnim != nil)
+	fmt.Printf("[%d] [ANIM] Found eye_idle=%v mouth_idle=%v\n", Ts(), eyeIdleAnim != nil, mouthAnim != nil)
 
 	// Helper to convert []byte (G,R,B triplets) to []uint32 for PIO WS2812
 	// Color format: uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
@@ -295,7 +303,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	safeWrite := func(name string, strip *piolib.WS2812B, raw []uint32) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("[ANIM safeWrite panic name=%s len=%d] %v\n", name, len(raw), r)
+				fmt.Printf("[%d] [ANIM safeWrite panic name=%s len=%d] %v\n", Ts(), name, len(raw), r)
 			}
 		}()
 		if strip != nil && len(raw) > 0 {
@@ -304,67 +312,67 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	}
 
 	// Eye strip: PIO0 SM0, GP18
-	println("[ANIM] Claiming SM0 for eye strip...")
+	fmt.Printf("[%d] [ANIM] Claiming SM0 for eye strip...\n", Ts())
 	sm0, err := pio.PIO0.ClaimStateMachine()
 	if err != nil {
-		println("[ANIM] ERROR: Failed to claim SM0:", err.Error())
+		fmt.Printf("[%d] [ANIM] ERROR: Failed to claim SM0: %s\n", Ts(), err.Error())
 	} else {
-		println("[ANIM] SM0 claimed, initializing WS2812B on GP18...")
+		fmt.Printf("[%d] [ANIM] SM0 claimed, initializing WS2812B on GP18...\n", Ts())
 		strip1, err = piolib.NewWS2812B(sm0, machine.GP18)
 		if err != nil {
-			println("[ANIM] ERROR: Failed to init eye strip:", err.Error())
+			fmt.Printf("[%d] [ANIM] ERROR: Failed to init eye strip: %s\n", Ts(), err.Error())
 		} else {
-			println("[ANIM] Eye strip initialized, enabling DMA...")
+			fmt.Printf("[%d] [ANIM] Eye strip initialized, enabling DMA...\n", Ts())
 			strip1.EnableDMA(true)
 			eyeOK = true
-			println("[ANIM] Eye strip ready")
+			fmt.Printf("[%d] [ANIM] Eye strip ready\n", Ts())
 		}
 	}
 
 	// Mouth strip: PIO0 SM1, GP12
-	println("[ANIM] Claiming SM1 for mouth strip...")
+	fmt.Printf("[%d] [ANIM] Claiming SM1 for mouth strip...\n", Ts())
 	sm1, err := pio.PIO0.ClaimStateMachine()
 	if err != nil {
-		println("[ANIM] ERROR: Failed to claim SM1:", err.Error())
+		fmt.Printf("[%d] [ANIM] ERROR: Failed to claim SM1: %s\n", Ts(), err.Error())
 	} else {
-		println("[ANIM] SM1 claimed, initializing WS2812B on GP12...")
+		fmt.Printf("[%d] [ANIM] SM1 claimed, initializing WS2812B on GP12...\n", Ts())
 		strip2, err = piolib.NewWS2812B(sm1, machine.GP12)
 		if err != nil {
-			println("[ANIM] ERROR: Failed to init mouth strip:", err.Error())
+			fmt.Printf("[%d] [ANIM] ERROR: Failed to init mouth strip: %s\n", Ts(), err.Error())
 		} else {
-			println("[ANIM] Mouth strip initialized, enabling DMA...")
+			fmt.Printf("[%d] [ANIM] Mouth strip initialized, enabling DMA...\n", Ts())
 			strip2.EnableDMA(true)
 			mouthOK = true
-			println("[ANIM] Mouth strip ready")
+			fmt.Printf("[%d] [ANIM] Mouth strip ready\n", Ts())
 		}
 	}
 
-	fmt.Printf("[ANIM] PIO init complete: eye=%v mouth=%v\n", eyeOK, mouthOK)
+	fmt.Printf("[%d] [ANIM] PIO init complete: eye=%v mouth=%v\n", Ts(), eyeOK, mouthOK)
 
 	// Self-test: write black frames to verify strips work
-	println("[ANIM SELFTEST] Testing strips with black frames...")
+	fmt.Printf("[%d] [ANIM SELFTEST] Testing strips with black frames...\n", Ts())
 	if eyeOK {
 		testFrame := make([]uint32, EyeFrameWidth*EyeFrameHeight)
 		safeWrite("eye-test", strip1, testFrame)
-		println("[ANIM SELFTEST] eye OK")
+		fmt.Printf("[%d] [ANIM SELFTEST] eye OK\n", Ts())
 	}
 	if mouthOK {
 		testFrame := make([]uint32, MouthFrameWidth*MouthFrameHeight)
 		safeWrite("mouth-test", strip2, testFrame)
-		println("[ANIM SELFTEST] mouth OK")
+		fmt.Printf("[%d] [ANIM SELFTEST] mouth OK\n", Ts())
 	}
 	time.Sleep(100 * time.Millisecond)
 
 	// If both strips failed, blink LED rapidly to indicate error but don't exit
 	if !eyeOK && !mouthOK {
-		println("[ANIM] WARNING: Both strips failed! Blinking error pattern...")
+		fmt.Printf("[%d] [ANIM] WARNING: Both strips failed! Blinking error pattern...\n", Ts())
 		for i := 0; i < 20; i++ {
 			led.High()
 			time.Sleep(50 * time.Millisecond)
 			led.Low()
 			time.Sleep(50 * time.Millisecond)
 		}
-		println("[ANIM] Continuing anyway (will just consume animChan)...")
+		fmt.Printf("[%d] [ANIM] Continuing anyway (will just consume animChan)...\n", Ts())
 	}
 
 	var currentEyeAnim *Animation
@@ -391,7 +399,9 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	} else {
 		currentEyeAnim = eyeIdleAnim
 	}
+	fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), currentEyeAnim.Name, len(currentEyeAnim.Frames))
 	curEyeRaw = preconvert(currentEyeAnim)
+	fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentEyeAnim.Name, len(curEyeRaw[0]), len(currentEyeAnim.Frames)*len(curEyeRaw[0])*4)
 
 	// Initial setup for currentMouthAnim with properly-sized black frame fallback
 	if mouthAnim == nil {
@@ -404,27 +414,45 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 	} else {
 		currentMouthAnim = mouthAnim
 	}
+	fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), currentMouthAnim.Name, len(currentMouthAnim.Frames))
 	curMouthRaw = preconvert(currentMouthAnim)
+	fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentMouthAnim.Name, len(curMouthRaw[0]), len(currentMouthAnim.Frames)*len(curMouthRaw[0])*4)
 
 	var eyeFrameCounter int64
 	var mouthFrameCounter int64
 
-	println("[ANIM] Entering animation loop...")
+	fmt.Printf("[%d] [ANIM] Entering animation loop...\n", Ts())
 
+	// Canary goroutine - prints every 2s to prove animation goroutine is alive
+	go func() {
+		tick := int64(0)
+		for {
+			time.Sleep(2 * time.Second)
+			tick++
+			fmt.Printf("[%d] [ANIM TICK] %d\n", Ts(), tick)
+		}
+	}()
+
+	var loopIter int64
 	for {
+		loopIter++
+		if loopIter%100 == 0 {
+			fmt.Printf("[%d] [ANIM LOOP] iter=%d eyeFrame=%d mouthFrame=%d\n",
+				Ts(), loopIter, eyeFrameCounter, mouthFrameCounter)
+		}
 		// Check for new animation command (non-blocking)
 		select {
 		case update := <-animChan:
 			if update.Eye != nil {
 				queuedEyeAnim = update.Eye
 				if debugLog {
-					fmt.Printf("[ANIM] Queued eye: %s\n", update.Eye.Name)
+					fmt.Printf("[%d] [ANIM] Queued eye: %s\n", Ts(), update.Eye.Name)
 				}
 			}
 			if update.Mouth != nil {
 				queuedMouthAnim = update.Mouth
 				if debugLog {
-					fmt.Printf("[ANIM] Queued mouth: %s\n", update.Mouth.Name)
+					fmt.Printf("[%d] [ANIM] Queued mouth: %s\n", Ts(), update.Mouth.Name)
 				}
 			}
 		default:
@@ -437,10 +465,16 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 			// Validate frame size before write
 			expectedPixels := EyeFrameWidth * EyeFrameHeight
 			if len(raw) != expectedPixels {
-				fmt.Printf("[ANIM SKIP eye] len=%d expected=%d name=%s frame=%d\n",
-					len(raw), expectedPixels, currentEyeAnim.Name, frameIdx)
+				fmt.Printf("[%d] [ANIM SKIP eye] len=%d expected=%d name=%s frame=%d\n",
+					Ts(), len(raw), expectedPixels, currentEyeAnim.Name, frameIdx)
 			} else {
+				if debugLog {
+					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "eye", len(raw))
+				}
 				safeWrite("eye", strip1, raw)
+				if debugLog {
+					fmt.Printf("[%d] [WR<] %s\n", Ts(), "eye")
+				}
 			}
 		}
 
@@ -451,10 +485,16 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 			// Validate frame size before write
 			expectedPixels := MouthFrameWidth * MouthFrameHeight
 			if len(raw) != expectedPixels {
-				fmt.Printf("[ANIM SKIP mouth] len=%d expected=%d name=%s frame=%d\n",
-					len(raw), expectedPixels, currentMouthAnim.Name, frameIdx)
+				fmt.Printf("[%d] [ANIM SKIP mouth] len=%d expected=%d name=%s frame=%d\n",
+					Ts(), len(raw), expectedPixels, currentMouthAnim.Name, frameIdx)
 			} else {
+				if debugLog {
+					fmt.Printf("[%d] [WR>] %s len=%d\n", Ts(), "mouth", len(raw))
+				}
 				safeWrite("mouth", strip2, raw)
+				if debugLog {
+					fmt.Printf("[%d] [WR<] %s\n", Ts(), "mouth")
+				}
 			}
 		}
 
@@ -468,10 +508,12 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 			if eyeFrameCounter > 0 && (eyeFrameCounter%int64(len(curEyeRaw)) == 0) {
 				if queuedEyeAnim != currentEyeAnim {
 					if debugLog {
-						fmt.Printf("[ANIM] Transitioning Eye to: %s\n", queuedEyeAnim.Name)
+						fmt.Printf("[%d] [ANIM] Transitioning Eye to: %s\n", Ts(), queuedEyeAnim.Name)
 					}
 					currentEyeAnim = queuedEyeAnim
+					fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), queuedEyeAnim.Name, len(queuedEyeAnim.Frames))
 					curEyeRaw = preconvert(currentEyeAnim)
+					fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentEyeAnim.Name, len(curEyeRaw[0]), len(currentEyeAnim.Frames)*len(curEyeRaw[0])*4)
 					eyeFrameCounter = 0
 				}
 				queuedEyeAnim = nil
@@ -483,10 +525,12 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 			if mouthFrameCounter > 0 && (mouthFrameCounter%int64(len(curMouthRaw)) == 0) {
 				if queuedMouthAnim != currentMouthAnim {
 					if debugLog {
-						fmt.Printf("[ANIM] Transitioning Mouth to: %s\n", queuedMouthAnim.Name)
+						fmt.Printf("[%d] [ANIM] Transitioning Mouth to: %s\n", Ts(), queuedMouthAnim.Name)
 					}
 					currentMouthAnim = queuedMouthAnim
+					fmt.Printf("[%d] [PRE>] start name=%s frames=%d\n", Ts(), queuedMouthAnim.Name, len(queuedMouthAnim.Frames))
 					curMouthRaw = preconvert(currentMouthAnim)
+					fmt.Printf("[%d] [PRE<] done name=%s pixels/frame=%d totalbytes=%d\n", Ts(), currentMouthAnim.Name, len(curMouthRaw[0]), len(currentMouthAnim.Frames)*len(curMouthRaw[0])*4)
 					mouthFrameCounter = 0
 				}
 				queuedMouthAnim = nil
