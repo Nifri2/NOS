@@ -50,16 +50,15 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 						fmt.Printf("[%d] [MEM DISP] alloc=%d totalAlloc=%d sys=%d\n",
 							Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
 					}
-					// Scheduled reset at 5 minutes - signal main loop to broadcast then reset
+					// Scheduled reset at 5 minutes - signal main loop to broadcast then CPUReset
 					if tick >= 300 {
 						fmt.Printf("[%d] [SCHED RESET] 5min uptime, triggering coordinated reboot\n", Ts())
 						select {
 						case rebootTrigger <- struct{}{}:
 						default:
 						}
-						for {
-							time.Sleep(100 * time.Millisecond)
-						}
+						// Spin so tick stops incrementing; main loop handles the actual reset
+						for { time.Sleep(time.Second) }
 					}
 				}
 			}()
@@ -110,6 +109,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 					}
 				}()
 				for packet := range uartChan {
+					if packet[2] != byte(Cmd_NoOp) {
+						fmt.Printf("[%d] [TX] writing cmd=%02X addr=%02X\n", Ts(), packet[2], packet[1])
+					}
 					uart.Write(packet[:])
 					txWritten++
 					lastTxWriteCompletedMs = Ts()
@@ -217,17 +219,17 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		machine.Watchdog.Update()
 
-		// Coordinated reboot: broadcast Cmd_Reboot, give workers 5s to reset via watchdog
+		// Coordinated reboot: broadcast Cmd_Reboot, flush UART, hard reset
 		select {
 		case <-rebootTrigger:
-			fmt.Printf("[%d] [REBOOT] scheduled, broadcasting Cmd_Reboot\n", Ts())
+			fmt.Printf("[%d] [REBOOT] broadcasting Cmd_Reboot\n", Ts())
 			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
 			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
-			time.Sleep(3 * time.Second)
-			fmt.Printf("[%d] [REBOOT] dispatcher resetting\n", Ts())
-			for {
-				time.Sleep(100 * time.Millisecond)
-			}
+			time.Sleep(500 * time.Millisecond) // let UART writer flush 6-byte packet
+			fmt.Printf("[%d] [REBOOT] calling CPUReset NOW\n", Ts())
+			time.Sleep(50 * time.Millisecond) // let print flush
+			machine.CPUReset()
+			for { time.Sleep(time.Second) } // unreachable
 		default:
 		}
 
@@ -273,14 +275,14 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			}
 
 		case 0x13: // System reboot (D+D radio input)
-			fmt.Printf("[%d] [REBOOT] D+D pressed, broadcasting Cmd_Reboot\n", Ts())
+			fmt.Printf("[%d] [REBOOT] broadcasting Cmd_Reboot\n", Ts())
 			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
 			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
-			time.Sleep(3 * time.Second)
-			fmt.Printf("[%d] [REBOOT] dispatcher resetting\n", Ts())
-			for {
-				time.Sleep(100 * time.Millisecond)
-			}
+			time.Sleep(500 * time.Millisecond) // let UART writer flush 6-byte packet
+			fmt.Printf("[%d] [REBOOT] calling CPUReset NOW\n", Ts())
+			time.Sleep(50 * time.Millisecond) // let print flush
+			machine.CPUReset()
+			for { time.Sleep(time.Second) } // unreachable
 
 		default:
 			fmt.Printf("[%d] Unknown Mode, resetting to 0x00\n", Ts())
