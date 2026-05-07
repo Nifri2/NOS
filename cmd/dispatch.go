@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 	"machine"
-	"math/rand"
+	"runtime"
 	"time"
 )
 
@@ -21,6 +21,35 @@ var Radio_Pins = []machine.Pin{Radio_Pin_0, Radio_Pin_1, Radio_Pin_2, Radio_Pin_
 // Example: [address, command, animID_eye, animID_mouth]
 
 func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
+	// Independent watchdog/diagnostic goroutine - spawned FIRST, before anything else
+	// This goroutine proves the scheduler is alive even if other goroutines freeze
+	go func() {
+		for {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Printf("[%d] [WD DISP PANIC] %v\n", Ts(), r)
+						time.Sleep(time.Second)
+					}
+				}()
+				var tick int
+				var ms runtime.MemStats
+				for {
+					time.Sleep(5 * time.Second)
+					tick++
+					fmt.Printf("[%d] [WD DISP] alive\n", Ts())
+					// Log heap stats every 30s (every 6th tick)
+					if tick%6 == 0 {
+						runtime.ReadMemStats(&ms)
+						fmt.Printf("[%d] [MEM DISP] alloc=%d totalAlloc=%d sys=%d\n",
+							Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
+					}
+				}
+			}()
+			fmt.Printf("[%d] [WD DISP] Restarting watchdog goroutine...\n", Ts())
+		}
+	}()
+
 	// Startup banner 3x with 200ms gaps (matches worker pattern)
 	for i := 0; i < 3; i++ {
 		fmt.Printf("[%d] ========================================\n", Ts())
@@ -52,6 +81,12 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	var txWritten uint32
 	var radioEvents uint32
 
+	// UART writer health tracking
+	lastTxWriteCompleted := time.Now()
+
+	// Rate-limit drop log to avoid log spam if writer is stuck
+	lastDropLogTime := time.Now().Add(-time.Minute) // Allow first log immediately
+
 	// UART Writer Goroutine with recoverable supervisor
 	go func() {
 		for {
@@ -65,9 +100,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				for packet := range uartChan {
 					uart.Write(packet[:])
 					txWritten++
-					if debugLog {
-						fmt.Printf("[%d] TX -> Addr: %d Cmd: %d\n", Ts(), packet[1], packet[2])
-					}
+					lastTxWriteCompleted = time.Now()
 				}
 			}()
 			fmt.Printf("[%d] [UART WRITER] Restarting...\n", Ts())
@@ -94,7 +127,11 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			txQueued++
 		default:
 			txDropped++
-			fmt.Printf("[%d] [WARN] UART Queue Full!\n", Ts())
+			// Rate-limit drop log to 1 per second max
+			if time.Since(lastDropLogTime) >= time.Second {
+				fmt.Printf("[%d] [WARN] UART Queue Full! dropped=%d\n", Ts(), txDropped)
+				lastDropLogTime = time.Now()
+			}
 		}
 	}
 
@@ -130,9 +167,6 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		return 0, false
 	}
 
-	// Initialize RNG
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	// 1Hz LED heartbeat and 10s heartbeat log
 	lastLedToggle := time.Now()
 	lastHeartbeat := time.Now()
@@ -158,8 +192,12 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		// Heartbeat log every 10 seconds with counters
 		if time.Since(lastHeartbeat) >= 10*time.Second {
-			fmt.Printf("[%d] [HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d mode=0x%02X\n",
-				Ts(), txQueued, txWritten, txDropped, radioEvents, currentMode)
+			writerStuckSec := int(time.Since(lastTxWriteCompleted).Seconds())
+			fmt.Printf("[%d] [HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d mode=0x%02X writerStuckSec=%d\n",
+				Ts(), txQueued, txWritten, txDropped, radioEvents, currentMode, writerStuckSec)
+			if writerStuckSec > 10 {
+				fmt.Printf("[%d] [ALERT] UART writer appears stuck for %d seconds!\n", Ts(), writerStuckSec)
+			}
 			machine.Watchdog.Update()
 			lastHeartbeat = now
 		}
@@ -170,12 +208,8 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		case 0x00: // Standard Idle (Workers 0 & 1)
 			workers := []Address{Worker_0, Worker_1}
 
-			// 1. Random Sleep
-			sleepTime := 3000 + r.Intn(10)
-			if debugLog {
-				fmt.Printf("[%d] [MODE 0x00] sleep=%dms\n", Ts(), sleepTime)
-			}
-			if m, changed := sleepWithInterrupt(sleepTime); changed {
+			// 1. Sleep between blinks (fixed 3s, no RNG to eliminate allocation)
+			if m, changed := sleepWithInterrupt(3000); changed {
 				currentMode = m
 				fmt.Printf("[%d] Mode Change -> %d\n", Ts(), m)
 				continue
