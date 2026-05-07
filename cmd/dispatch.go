@@ -215,11 +215,12 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		machine.Watchdog.Update()
 
-		// Coordinated reboot: broadcast Cmd_Reboot, give workers 3s to play anim, then reset
+		// Coordinated reboot: broadcast Cmd_Reboot, give workers 5s to reset via watchdog
 		select {
 		case <-rebootTrigger:
 			fmt.Printf("[%d] [REBOOT] scheduled, broadcasting Cmd_Reboot\n", Ts())
-			sendPacket(Address_All, Cmd_Reboot, Anim_RebootEye, Anim_RebootMouth)
+			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
+			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
 			time.Sleep(3 * time.Second)
 			fmt.Printf("[%d] [REBOOT] dispatcher resetting\n", Ts())
 			for {
@@ -271,7 +272,8 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		case 0x0F: // System reboot (D+D radio input)
 			fmt.Printf("[%d] [REBOOT] D+D pressed, broadcasting Cmd_Reboot\n", Ts())
-			sendPacket(Address_All, Cmd_Reboot, Anim_RebootEye, Anim_RebootMouth)
+			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
+			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
 			time.Sleep(3 * time.Second)
 			fmt.Printf("[%d] [REBOOT] dispatcher resetting\n", Ts())
 			for {
