@@ -226,9 +226,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
 			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
 			time.Sleep(500 * time.Millisecond) // let UART writer flush 6-byte packet
-			fmt.Printf("[%d] [REBOOT] calling CPUReset NOW\n", Ts())
+			fmt.Printf("[%d] [REBOOT] hard reset NOW\n", Ts())
 			time.Sleep(50 * time.Millisecond) // let print flush
-			machine.CPUReset()
+			HardReset()
 			for { time.Sleep(time.Second) } // unreachable
 		default:
 		}
@@ -279,9 +279,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
 			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
 			time.Sleep(500 * time.Millisecond) // let UART writer flush 6-byte packet
-			fmt.Printf("[%d] [REBOOT] calling CPUReset NOW\n", Ts())
+			fmt.Printf("[%d] [REBOOT] hard reset NOW\n", Ts())
 			time.Sleep(50 * time.Millisecond) // let print flush
-			machine.CPUReset()
+			HardReset()
 			for { time.Sleep(time.Second) } // unreachable
 
 		default:

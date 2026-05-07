@@ -88,7 +88,6 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	lastHeartbeat := time.Now()
 	lastLedToggle := time.Now()
 	ledState := false
-	rebootRequested := false
 
 	fmt.Printf("[%d] Entering main UART loop...\n", Ts())
 
@@ -109,9 +108,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 				led.Low()
 			}
 			lastLedToggle = now
-			if !rebootRequested {
-				machine.Watchdog.Update()
-			}
+			machine.Watchdog.Update()
 		}
 
 		// Heartbeat log every 10 seconds
@@ -181,14 +178,13 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 								led.Low()
 								ledState = false
 							case Cmd_NoOp:
-								if !rebootRequested {
-									machine.Watchdog.Update()
-								}
+								machine.Watchdog.Update()
 							case Cmd_Ping:
 								fmt.Printf("[%d] [PING from dispatcher]\n", Ts())
 							case Cmd_Reboot:
-								fmt.Printf("[%d] [REBOOT] received, awaiting watchdog reset\n", Ts())
-								rebootRequested = true
+								fmt.Printf("[%d] [REBOOT] received, hard resetting in 500ms\n", Ts())
+								time.Sleep(500 * time.Millisecond)
+								HardReset()
 
 						case Cmd_DisplayAnim:
 								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
