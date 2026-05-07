@@ -35,27 +35,22 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				var tick int
 				var ms runtime.MemStats
 				for {
-					time.Sleep(5 * time.Second)
+					time.Sleep(time.Second)
 					tick++
-					fmt.Printf("[%d] [WD DISP] alive\n", Ts())
-					// Log heap stats every 30s (every 6th tick)
-					if tick%6 == 0 {
+					if tick%5 == 0 {
+						fmt.Printf("[%d] [WD DISP] alive\n", Ts())
+					}
+					if tick%30 == 0 {
 						runtime.ReadMemStats(&ms)
 						fmt.Printf("[%d] [MEM DISP] alloc=%d totalAlloc=%d sys=%d\n",
 							Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
-						// Soft reset threshold - if alloc exceeds 400KB, stop feeding watchdog
-						if ms.Alloc > 400000 {
-							fmt.Printf("[%d] [SOFT RESET] alloc=%d threshold reached\n", Ts(), ms.Alloc)
-							time.Sleep(100 * time.Millisecond)
-							// Stop feeding watchdog - let it fire for clean reset
-							for {
-								time.Sleep(time.Second)
-							}
-						}
 					}
-					// Periodic GC every 60s (every 12th tick)
-					if tick%12 == 0 {
-						runtime.GC()
+					// Scheduled reset at 5 minutes - pre-empts random freezes
+					if tick >= 300 {
+						fmt.Printf("[%d] [SCHED RESET] 5min uptime, resetting\n", Ts())
+						for {
+							time.Sleep(100 * time.Millisecond)
+						}
 					}
 				}
 			}()
@@ -63,21 +58,16 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		}
 	}()
 
-	// Startup banner 3x with 200ms gaps (matches worker pattern)
-	for i := 0; i < 3; i++ {
-		fmt.Printf("[%d] ========================================\n", Ts())
-		fmt.Printf("[%d] RunDispatcher ENTERED - addr=%d\n", Ts(), int(config.Address))
-		fmt.Printf("[%d] UART: 38400 baud, TX=GP0, RX=GP1\n", Ts())
-		fmt.Printf("[%d] ========================================\n", Ts())
-		time.Sleep(200 * time.Millisecond)
-	}
+	fmt.Printf("[%d] ========================================\n", Ts())
+	fmt.Printf("[%d] RunDispatcher ENTERED - addr=%d\n", Ts(), int(config.Address))
+	fmt.Printf("[%d] UART: 38400 baud, TX=GP0, RX=GP1\n", Ts())
+	fmt.Printf("[%d] ========================================\n", Ts())
 
 	fmt.Printf("[%d] Starting Dispatcher Loop\n", Ts())
 
-	// Configure Watchdog (8s timeout)
-	fmt.Printf("[%d] Configuring watchdog (8s timeout)...\n", Ts())
-	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 8000})
-	fmt.Printf("[%d] [DISP] Watchdog timeout: 8000ms\n", Ts())
+	fmt.Printf("[%d] Configuring watchdog (1.5s timeout)...\n", Ts())
+	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 1500})
+	fmt.Printf("[%d] [DISP] Watchdog timeout: 1500ms\n", Ts())
 
 	// Radio Channel
 	radioChan := make(chan byte, 10)

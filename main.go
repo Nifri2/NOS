@@ -96,13 +96,7 @@ func main() {
 	// Phase 1: Quick role identification blinks
 	switch config.Role {
 	case cmd.Dispatcher:
-		// 2 fast blinks for dispatcher
-		for i := 0; i < 2; i++ {
-			led.High()
-			time.Sleep(200 * time.Millisecond)
-			led.Low()
-			time.Sleep(200 * time.Millisecond)
-		}
+		// Fast boot - no patterns, dispatcher resets need to be invisible
 	case cmd.Worker:
 		// 5 fast blinks for worker
 		for i := 0; i < 5; i++ {
@@ -116,21 +110,7 @@ func main() {
 	// Phase 2: Role-specific pattern to confirm main() reached role switch
 	switch config.Role {
 	case cmd.Dispatcher:
-		// Morse-ish: short-long-short (S) pattern x3
-		for i := 0; i < 3; i++ {
-			led.High()
-			time.Sleep(100 * time.Millisecond) // short
-			led.Low()
-			time.Sleep(100 * time.Millisecond)
-			led.High()
-			time.Sleep(400 * time.Millisecond) // long
-			led.Low()
-			time.Sleep(100 * time.Millisecond)
-			led.High()
-			time.Sleep(100 * time.Millisecond) // short
-			led.Low()
-			time.Sleep(300 * time.Millisecond) // gap between patterns
-		}
+		// Fast boot - no patterns, dispatcher resets need to be invisible
 	case cmd.Worker:
 		// 3 long blinks (500ms on / 500ms off)
 		for i := 0; i < 3; i++ {
