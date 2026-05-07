@@ -194,6 +194,11 @@ tasks:
       - task: compile_anims
       - task: generate_embeds
 
+  test:
+    desc: "Run unit tests (pure-Go subset of cmd package)"
+    cmds:
+      - go test ./cmd/
+
   generate_commit:
     desc: "Generate commit message with Claude, commit and push"
     cmds:

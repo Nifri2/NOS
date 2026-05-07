@@ -20,9 +20,9 @@ func TestRadioEncoding(t *testing.T) {
 		{2, -1, 0x02, "C single"},
 		{3, -1, 0x03, "D single"},
 		{0, 0, 0x04, "A+A"},
-		{3, 3, 0x0F, "D+D (reboot)"},
+		{3, 3, 0x13, "D+D (reboot)"},
 		{0, 3, 0x07, "A+D"},
-		{3, 0, 0x0C, "D+A"},
+		{3, 0, 0x10, "D+A"},
 	}
 	for _, c := range cases {
 		got := radioEncode(c.p1, c.p2)

@@ -1,3 +1,5 @@
+//go:build tinygo
+
 package cmd
 
 import (
@@ -270,7 +272,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				continue
 			}
 
-		case 0x0F: // System reboot (D+D radio input)
+		case 0x13: // System reboot (D+D radio input)
 			fmt.Printf("[%d] [REBOOT] D+D pressed, broadcasting Cmd_Reboot\n", Ts())
 			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
 			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
