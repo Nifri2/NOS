@@ -43,6 +43,19 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 						runtime.ReadMemStats(&ms)
 						fmt.Printf("[%d] [MEM DISP] alloc=%d totalAlloc=%d sys=%d\n",
 							Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
+						// Soft reset threshold - if alloc exceeds 400KB, stop feeding watchdog
+						if ms.Alloc > 400000 {
+							fmt.Printf("[%d] [SOFT RESET] alloc=%d threshold reached\n", Ts(), ms.Alloc)
+							time.Sleep(100 * time.Millisecond)
+							// Stop feeding watchdog - let it fire for clean reset
+							for {
+								time.Sleep(time.Second)
+							}
+						}
+					}
+					// Periodic GC every 60s (every 12th tick)
+					if tick%12 == 0 {
+						runtime.GC()
 					}
 				}
 			}()
@@ -81,11 +94,11 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	var txWritten uint32
 	var radioEvents uint32
 
-	// UART writer health tracking
-	lastTxWriteCompleted := time.Now()
+	// UART writer health tracking (int64 ms to avoid time.Time allocations)
+	lastTxWriteCompletedMs := Ts()
 
-	// Rate-limit drop log to avoid log spam if writer is stuck
-	lastDropLogTime := time.Now().Add(-time.Minute) // Allow first log immediately
+	// Rate-limit drop log to avoid log spam if writer is stuck (int64 ms)
+	lastDropLogTimeMs := Ts() - 60000 // Allow first log immediately
 
 	// UART Writer Goroutine with recoverable supervisor
 	go func() {
@@ -100,7 +113,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				for packet := range uartChan {
 					uart.Write(packet[:])
 					txWritten++
-					lastTxWriteCompleted = time.Now()
+					lastTxWriteCompletedMs = Ts()
 				}
 			}()
 			fmt.Printf("[%d] [UART WRITER] Restarting...\n", Ts())
@@ -128,9 +141,10 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		default:
 			txDropped++
 			// Rate-limit drop log to 1 per second max
-			if time.Since(lastDropLogTime) >= time.Second {
-				fmt.Printf("[%d] [WARN] UART Queue Full! dropped=%d\n", Ts(), txDropped)
-				lastDropLogTime = time.Now()
+			nowMs := Ts()
+			if nowMs-lastDropLogTimeMs >= 1000 {
+				fmt.Printf("[%d] [WARN] UART Queue Full! dropped=%d\n", nowMs, txDropped)
+				lastDropLogTimeMs = nowMs
 			}
 		}
 	}
@@ -167,9 +181,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		return 0, false
 	}
 
-	// 1Hz LED heartbeat and 10s heartbeat log
-	lastLedToggle := time.Now()
-	lastHeartbeat := time.Now()
+	// 1Hz LED heartbeat and 10s heartbeat log (int64 ms to avoid time.Time allocations)
+	lastLedToggleMs := Ts()
+	lastHeartbeatMs := Ts()
 	ledState := false
 
 	fmt.Printf("[%d] Entering main dispatcher loop...\n", Ts())
@@ -177,29 +191,29 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// TODO: Send Cmd_Ping to Address_All on a chosen radio input for liveness check
 
 	for {
-		now := time.Now()
+		nowMs := Ts()
 
 		// 1Hz LED heartbeat - proves loop is running
-		if time.Since(lastLedToggle) >= time.Second {
+		if nowMs-lastLedToggleMs >= 1000 {
 			ledState = !ledState
 			if ledState {
 				led.High()
 			} else {
 				led.Low()
 			}
-			lastLedToggle = now
+			lastLedToggleMs = nowMs
 		}
 
 		// Heartbeat log every 10 seconds with counters
-		if time.Since(lastHeartbeat) >= 10*time.Second {
-			writerStuckSec := int(time.Since(lastTxWriteCompleted).Seconds())
+		if nowMs-lastHeartbeatMs >= 10000 {
+			writerStuckSec := int((nowMs - lastTxWriteCompletedMs) / 1000)
 			fmt.Printf("[%d] [HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d mode=0x%02X writerStuckSec=%d\n",
-				Ts(), txQueued, txWritten, txDropped, radioEvents, currentMode, writerStuckSec)
+				nowMs, txQueued, txWritten, txDropped, radioEvents, currentMode, writerStuckSec)
 			if writerStuckSec > 10 {
-				fmt.Printf("[%d] [ALERT] UART writer appears stuck for %d seconds!\n", Ts(), writerStuckSec)
+				fmt.Printf("[%d] [ALERT] UART writer appears stuck for %d seconds!\n", nowMs, writerStuckSec)
 			}
 			machine.Watchdog.Update()
-			lastHeartbeat = now
+			lastHeartbeatMs = nowMs
 		}
 
 		machine.Watchdog.Update()
