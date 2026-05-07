@@ -21,6 +21,9 @@ var Radio_Pins = []machine.Pin{Radio_Pin_0, Radio_Pin_1, Radio_Pin_2, Radio_Pin_
 // Example: [address, command, animID_eye, animID_mouth]
 
 func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
+	// Buffered so watchdog goroutine can signal without blocking
+	rebootTrigger := make(chan struct{}, 1)
+
 	// Independent watchdog/diagnostic goroutine - spawned FIRST, before anything else
 	// This goroutine proves the scheduler is alive even if other goroutines freeze
 	go func() {
@@ -45,9 +48,13 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 						fmt.Printf("[%d] [MEM DISP] alloc=%d totalAlloc=%d sys=%d\n",
 							Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
 					}
-					// Scheduled reset at 5 minutes - pre-empts random freezes
+					// Scheduled reset at 5 minutes - signal main loop to broadcast then reset
 					if tick >= 300 {
-						fmt.Printf("[%d] [SCHED RESET] 5min uptime, resetting\n", Ts())
+						fmt.Printf("[%d] [SCHED RESET] 5min uptime, triggering coordinated reboot\n", Ts())
+						select {
+						case rebootTrigger <- struct{}{}:
+						default:
+						}
 						for {
 							time.Sleep(100 * time.Millisecond)
 						}
@@ -208,6 +215,19 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		machine.Watchdog.Update()
 
+		// Coordinated reboot: broadcast Cmd_Reboot, give workers 3s to play anim, then reset
+		select {
+		case <-rebootTrigger:
+			fmt.Printf("[%d] [REBOOT] scheduled, broadcasting Cmd_Reboot\n", Ts())
+			sendPacket(Address_All, Cmd_Reboot, Anim_RebootEye, Anim_RebootMouth)
+			time.Sleep(3 * time.Second)
+			fmt.Printf("[%d] [REBOOT] dispatcher resetting\n", Ts())
+			for {
+				time.Sleep(100 * time.Millisecond)
+			}
+		default:
+		}
+
 		switch currentMode {
 		case 0x00: // Standard Idle (Workers 0 & 1)
 			workers := []Address{Worker_0, Worker_1}
@@ -247,6 +267,15 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				currentMode = m
 				fmt.Printf("[%d] Mode Change -> %d\n", Ts(), m)
 				continue
+			}
+
+		case 0x0F: // System reboot (D+D radio input)
+			fmt.Printf("[%d] [REBOOT] D+D pressed, broadcasting Cmd_Reboot\n", Ts())
+			sendPacket(Address_All, Cmd_Reboot, Anim_RebootEye, Anim_RebootMouth)
+			time.Sleep(3 * time.Second)
+			fmt.Printf("[%d] [REBOOT] dispatcher resetting\n", Ts())
+			for {
+				time.Sleep(100 * time.Millisecond)
 			}
 
 		default:
@@ -320,7 +349,7 @@ func runRadioLogicLoop(out chan byte) {
 			for getPressedPin() != -1 {
 				time.Sleep(10 * time.Millisecond)
 			}
-			result = byte(4 + (p1 << 2) | p2)
+			result = byte(4 + ((p1 << 2) | p2))
 		} else {
 			result = byte(p1)
 		}

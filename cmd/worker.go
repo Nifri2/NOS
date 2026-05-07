@@ -48,7 +48,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 
 	// Start animation routine in background
 	fmt.Printf("[%d] Starting displayAnimation goroutine...\n", Ts())
-	go displayAnimation(animChan, led)
+	go displayAnimation(animChan, led, config)
 	fmt.Printf("[%d] displayAnimation goroutine started\n", Ts())
 
 	// Watchdog logging goroutine - proves scheduler is alive even if other goroutines freeze
@@ -86,6 +86,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	lastHeartbeat := time.Now()
 	lastLedToggle := time.Now()
 	ledState := false
+	rebootRequested := false
 
 	fmt.Printf("[%d] Entering main UART loop...\n", Ts())
 
@@ -106,7 +107,9 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 				led.Low()
 			}
 			lastLedToggle = now
-			machine.Watchdog.Update() // Feed watchdog on LED toggle
+			if !rebootRequested {
+				machine.Watchdog.Update()
+			}
 		}
 
 		// Heartbeat log every 10 seconds
@@ -176,11 +179,29 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 								led.Low()
 								ledState = false
 							case Cmd_NoOp:
-								// NoOp - just keeps watchdog happy via packet receipt
-								machine.Watchdog.Update()
+								if !rebootRequested {
+									machine.Watchdog.Update()
+								}
 							case Cmd_Ping:
 								fmt.Printf("[%d] [PING from dispatcher]\n", Ts())
-							case Cmd_DisplayAnim:
+							case Cmd_Reboot:
+								fmt.Printf("[%d] [REBOOT] received, playing reboot anim\n", Ts())
+								rebootIdx := MapAnimation(config.Address, Anim_RebootEye)
+								rebootMouthIdx := MapAnimation(config.Address, Anim_RebootMouth)
+								var update animUpdate
+								if rebootIdx >= 0 && rebootIdx < len(LoadedAnimations) {
+									update.Eye = LoadedAnimations[rebootIdx]
+								}
+								if rebootMouthIdx >= 0 && rebootMouthIdx < len(LoadedAnimations) {
+									update.Mouth = LoadedAnimations[rebootMouthIdx]
+								}
+								select {
+								case animChan <- update:
+								default:
+								}
+								rebootRequested = true
+
+						case Cmd_DisplayAnim:
 								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
 								mouthIdx := MapAnimation(config.Address, AnimationID(mouthByte))
 								var update animUpdate
@@ -225,7 +246,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 }
 
 // displayAnimation is a recoverable supervisor that restarts the animation loop on panic
-func displayAnimation(animChan chan animUpdate, led machine.Pin) {
+func displayAnimation(animChan chan animUpdate, led machine.Pin, config Settings) {
 	for {
 		func() {
 			defer func() {
@@ -241,14 +262,14 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin) {
 					time.Sleep(time.Second)
 				}
 			}()
-			displayAnimationLoop(animChan, led)
+			displayAnimationLoop(animChan, led, config)
 		}()
 		fmt.Printf("[%d] [ANIM] Restarting animation loop...\n", Ts())
 	}
 }
 
 // displayAnimationLoop is the actual animation rendering logic
-func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
+func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Settings) {
 	fmt.Printf("[%d] [ANIM] displayAnimation started, waiting 2s for board stabilization...\n", Ts())
 
 	// Wait for the board to stabilize
@@ -348,6 +369,48 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin) {
 		fmt.Printf("[%d] [ANIM SELFTEST] mouth OK\n", Ts())
 	}
 	time.Sleep(100 * time.Millisecond)
+
+	// Boot animation - play one full cycle before entering main loop
+	bootEyeIdx := MapAnimation(config.Address, Anim_BootEye)
+	bootMouthIdx := MapAnimation(config.Address, Anim_BootMouth)
+	var bootEyeAnim *Animation
+	var bootMouthAnim *Animation
+	if bootEyeIdx >= 0 && bootEyeIdx < len(LoadedAnimations) {
+		bootEyeAnim = LoadedAnimations[bootEyeIdx]
+	}
+	if bootMouthIdx >= 0 && bootMouthIdx < len(LoadedAnimations) {
+		bootMouthAnim = LoadedAnimations[bootMouthIdx]
+	}
+	if bootEyeAnim != nil || bootMouthAnim != nil {
+		fmt.Printf("[%d] [ANIM] Playing boot animation...\n", Ts())
+		bootFrames := 0
+		if bootEyeAnim != nil && len(bootEyeAnim.Frames) > bootFrames {
+			bootFrames = len(bootEyeAnim.Frames)
+		}
+		if bootMouthAnim != nil && len(bootMouthAnim.Frames) > bootFrames {
+			bootFrames = len(bootMouthAnim.Frames)
+		}
+		for i := 0; i < bootFrames; i++ {
+			if eyeOK && bootEyeAnim != nil {
+				frameIdx := i % len(bootEyeAnim.Frames)
+				frameBytes := bootEyeAnim.Frames[frameIdx]
+				if len(frameBytes)/3 == EyeFrameWidth*EyeFrameHeight {
+					bytesToRawInto(eyeBuffer, frameBytes)
+					strip1.WriteRaw(eyeBuffer)
+				}
+			}
+			if mouthOK && bootMouthAnim != nil {
+				frameIdx := i % len(bootMouthAnim.Frames)
+				frameBytes := bootMouthAnim.Frames[frameIdx]
+				if len(frameBytes)/3 == MouthFrameWidth*MouthFrameHeight {
+					bytesToRawInto(mouthBuffer, frameBytes)
+					strip2.WriteRaw(mouthBuffer)
+				}
+			}
+			time.Sleep(16 * time.Millisecond)
+		}
+		fmt.Printf("[%d] [ANIM] Boot animation complete\n", Ts())
+	}
 
 	// If both strips failed, blink LED rapidly to indicate error but don't exit
 	if !eyeOK && !mouthOK {

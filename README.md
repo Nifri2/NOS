@@ -316,6 +316,8 @@ var animationMapping = map[Address]map[AnimationID]AnimationID{
      - `// ANIMID_START` / `// ANIMID_END` - AnimationID constants
      - `// MAPPING_START` / `// MAPPING_END` - Side mapping table
 
+> **Note:** After creating `compiler/animations/boot_eye.anim`, `boot_mouth.anim`, `reboot_eye.anim`, and `reboot_mouth.anim` source folders, run `task update_anims` to compile and regenerate embed directives and constants — the build will fail until those folders exist.
+
 ### Adding new animations
 
 1. Create animation frames in `compiler/animations/<name>.anim/`
