@@ -23,9 +23,6 @@ var Radio_Pins = []machine.Pin{Radio_Pin_0, Radio_Pin_1, Radio_Pin_2, Radio_Pin_
 // Example: [address, command, animID_eye, animID_mouth]
 
 func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
-	// Buffered so watchdog goroutine can signal without blocking
-	rebootTrigger := make(chan struct{}, 1)
-
 	// Independent watchdog/diagnostic goroutine - spawned FIRST, before anything else
 	// This goroutine proves the scheduler is alive even if other goroutines freeze
 	go func() {
@@ -50,16 +47,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 						fmt.Printf("[%d] [MEM DISP] alloc=%d totalAlloc=%d sys=%d\n",
 							Ts(), ms.Alloc, ms.TotalAlloc, ms.Sys)
 					}
-					// Scheduled reset at 5 minutes - signal main loop to broadcast then CPUReset
-					if tick >= 300 {
-						fmt.Printf("[%d] [SCHED RESET] 5min uptime, triggering coordinated reboot\n", Ts())
-						select {
-						case rebootTrigger <- struct{}{}:
-						default:
-						}
-						// Spin so tick stops incrementing; main loop handles the actual reset
-						for { time.Sleep(time.Second) }
-					}
+
 				}
 			}()
 			fmt.Printf("[%d] [WD DISP] Restarting watchdog goroutine...\n", Ts())
@@ -218,20 +206,6 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		}
 
 		machine.Watchdog.Update()
-
-		// Coordinated reboot: broadcast Cmd_Reboot, flush UART, hard reset
-		select {
-		case <-rebootTrigger:
-			fmt.Printf("[%d] [REBOOT] broadcasting Cmd_Reboot\n", Ts())
-			// Eye/mouth args unused for Cmd_Reboot but packet format requires them
-			sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
-			time.Sleep(500 * time.Millisecond) // let UART writer flush 6-byte packet
-			fmt.Printf("[%d] [REBOOT] hard reset NOW\n", Ts())
-			time.Sleep(50 * time.Millisecond) // let print flush
-			HardReset()
-			for { time.Sleep(time.Second) } // unreachable
-		default:
-		}
 
 		switch currentMode {
 		case 0x00: // Standard Idle (Workers 0 & 1)
