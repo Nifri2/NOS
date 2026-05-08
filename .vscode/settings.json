@@ -7,6 +7,6 @@
         "GOOS": "linux",
         "GOARCH": "arm",
         "GOROOT": "/home/niklas/.cache/tinygo/goroot-a174771b288dffeaada42260db925aa8cfc6c032f80092f23f654fab10060eba",
-        "GOFLAGS": "-tags=cortexm,baremetal,linux,arm,rp2350,rp,pico2,tinygo,purego,osusergo,math_big_pure_go,gc.conservative,scheduler.cores,serial.usb"
+        "GOFLAGS": "-tags=cortexm,baremetal,linux,arm,rp2350,rp,pico2,tinygo,purego,osusergo,math_big_pure_go,gc.conservative,scheduler.tasks,serial.usb"
     }
 }
