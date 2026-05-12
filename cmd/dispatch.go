@@ -65,6 +65,13 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 1500})
 	fmt.Printf("[%d] [DISP] Watchdog timeout: 1500ms\n", Ts())
 
+	// Configure GP26 (ADC0) for MAX9814 microphone input
+	adcPin := machine.GP26
+	adcPin.Configure(machine.PinConfig{Mode: machine.PinAnalog})
+	adc := machine.ADC{Pin: adcPin}
+	adc.Configure(machine.ADCConfig{})
+	fmt.Printf("[%d] ADC configured on GP26 (ADC0) for MAX9814 mic\n", Ts())
+
 	// Radio Channel
 	radioChan := make(chan byte, 10)
 
@@ -179,6 +186,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 	// TODO: Send Cmd_Ping to Address_All on a chosen radio input for liveness check
 
+	var loopCounter int
+	var lastMode byte = 0xFF // invalid sentinel so first iteration always detects entry
+
 	for {
 		nowMs := Ts()
 
@@ -207,6 +217,14 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 
 		machine.Watchdog.Update()
 
+		if currentMode != lastMode {
+			if currentMode == 0x01 {
+				fmt.Printf("[%d] [MIC MODE] entering live mouth\n", Ts())
+			}
+			lastMode = currentMode
+		}
+		loopCounter++
+
 		switch currentMode {
 		case 0x00: // Standard Idle (Workers 0 & 1)
 			workers := []Address{Worker_0, Worker_1}
@@ -234,6 +252,55 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			for _, w := range workers {
 				sendPacket(w, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
 			}
+
+		case 0x01: // Live Mouth Mode - MAX9814 mic on GP26
+			const adcCenter = 32768 // TinyGo normalises RP2350 12-bit ADC to 16-bit
+			var maxDev uint16
+			for i := 0; i < 64; i++ {
+				sample := adc.Get()
+				var dev uint16
+				if sample > adcCenter {
+					dev = sample - adcCenter
+				} else {
+					dev = adcCenter - sample
+				}
+				if dev > maxDev {
+					maxDev = dev
+				}
+			}
+
+			var mouthAnim AnimationID
+			switch {
+			case maxDev < 1000:
+				mouthAnim = Anim_MouthIdle
+			case maxDev < 3000:
+				mouthAnim = Anim_MouthOpen1
+			case maxDev < 6000:
+				mouthAnim = Anim_MouthOpen2
+			default:
+				mouthAnim = Anim_MouthOpen3
+			}
+
+			if debugLog && loopCounter%30 == 0 {
+				fmt.Printf("[%d] [MIC] maxDev=%d mouth=0x%02X\n",
+					Ts(), maxDev, int(mouthAnim))
+			}
+
+			sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeIdle, mouthAnim)
+
+			select {
+			case code := <-radioChan:
+				radioEvents++
+				fmt.Printf("[%d] [MIC MODE] exiting, back to idle\n", Ts())
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
+				currentMode = code
+				fmt.Printf("[%d] Mode Change -> %d\n", Ts(), int(code))
+				continue
+			default:
+			}
+
+			time.Sleep(33 * time.Millisecond)
+			machine.Watchdog.Update()
 
 		case 0x10: // Insignia Spinny (Worker 2)
 			sendPacket(Worker_2, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
