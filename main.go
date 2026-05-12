@@ -22,6 +22,24 @@ var mouthIdleLeftData []byte
 //go:embed animations/mouth_idle_right.animbyte
 var mouthIdleRightData []byte
 
+//go:embed animations/mouth_yap_1_left.animbyte
+var mouthYap1LeftData []byte
+
+//go:embed animations/mouth_yap_1_right.animbyte
+var mouthYap1RightData []byte
+
+//go:embed animations/mouth_yap_2_left.animbyte
+var mouthYap2LeftData []byte
+
+//go:embed animations/mouth_yap_2_right.animbyte
+var mouthYap2RightData []byte
+
+//go:embed animations/mouth_yap_3_left.animbyte
+var mouthYap3LeftData []byte
+
+//go:embed animations/mouth_yap_3_right.animbyte
+var mouthYap3RightData []byte
+
 // EMBED_END
 
 // buildRole and buildAddress are set at compile time via -ldflags
@@ -73,6 +91,36 @@ func main() {
 		fmt.Println("Error loading mouth_idle_right:", err)
 	}
 
+	mouthYap1LeftAnim, err := cmd.LoadAnimation(mouthYap1LeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_1_left")
+	if err != nil {
+		fmt.Println("Error loading mouth_yap_1_left:", err)
+	}
+
+	mouthYap1RightAnim, err := cmd.LoadAnimation(mouthYap1RightData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_1_right")
+	if err != nil {
+		fmt.Println("Error loading mouth_yap_1_right:", err)
+	}
+
+	mouthYap2LeftAnim, err := cmd.LoadAnimation(mouthYap2LeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_2_left")
+	if err != nil {
+		fmt.Println("Error loading mouth_yap_2_left:", err)
+	}
+
+	mouthYap2RightAnim, err := cmd.LoadAnimation(mouthYap2RightData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_2_right")
+	if err != nil {
+		fmt.Println("Error loading mouth_yap_2_right:", err)
+	}
+
+	mouthYap3LeftAnim, err := cmd.LoadAnimation(mouthYap3LeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_3_left")
+	if err != nil {
+		fmt.Println("Error loading mouth_yap_3_left:", err)
+	}
+
+	mouthYap3RightAnim, err := cmd.LoadAnimation(mouthYap3RightData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_3_right")
+	if err != nil {
+		fmt.Println("Error loading mouth_yap_3_right:", err)
+	}
+
 	// LOAD_END
 
 	// Populate global array in cmd package
@@ -89,6 +137,24 @@ func main() {
 	}
 	if mouthIdleRightAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthIdleRightAnim)
+	}
+	if mouthYap1LeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap1LeftAnim)
+	}
+	if mouthYap1RightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap1RightAnim)
+	}
+	if mouthYap2LeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap2LeftAnim)
+	}
+	if mouthYap2RightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap2RightAnim)
+	}
+	if mouthYap3LeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap3LeftAnim)
+	}
+	if mouthYap3RightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap3RightAnim)
 	}
 	// APPEND_END
 

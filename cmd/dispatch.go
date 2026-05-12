@@ -66,6 +66,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	fmt.Printf("[%d] [DISP] Watchdog timeout: 1500ms\n", Ts())
 
 	// Configure GP26 (ADC0) for MAX9814 microphone input
+	// InitADC must be called first — it sets ADC_CS.EN=1; without it
+	// adc.Get() polls ADC_CS.READY forever (peripheral disabled at boot).
+	machine.InitADC()
 	adcPin := machine.GP26
 	adcPin.Configure(machine.PinConfig{Mode: machine.PinAnalog})
 	adc := machine.ADC{Pin: adcPin}
@@ -187,7 +190,15 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// TODO: Send Cmd_Ping to Address_All on a chosen radio input for liveness check
 
 	var loopCounter int
-	var lastMode byte = 0xFF // invalid sentinel so first iteration always detects entry
+	var lastMode byte = 0xFF             // invalid sentinel so first iteration always detects entry
+	var lastMouthAnim AnimationID = 0xFF // invalid sentinel for mic mode state-change log
+	var micEyeAnim AnimationID = Anim_EyeIdle
+	var micBlinkActive bool
+	var lastBlinkMs int64  // marks start of blink (when active) or end of blink (when idle)
+	var micEnvelope uint16 // envelope follower: instant attack, slow decay
+	var committedMouth AnimationID = Anim_MouthIdle
+	var pendingMouth AnimationID = Anim_MouthIdle // candidate being counted toward
+	var micDebounce uint8                         // consecutive frames at pendingMouth
 
 	for {
 		nowMs := Ts()
@@ -220,6 +231,13 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		if currentMode != lastMode {
 			if currentMode == 0x01 {
 				fmt.Printf("[%d] [MIC MODE] entering live mouth\n", Ts())
+				micEyeAnim = Anim_EyeIdle
+				micBlinkActive = false
+				lastBlinkMs = nowMs
+				micEnvelope = 0
+				committedMouth = Anim_MouthIdle
+				pendingMouth = Anim_MouthIdle
+				micDebounce = 0
 			}
 			lastMode = currentMode
 		}
@@ -269,24 +287,65 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				}
 			}
 
-			var mouthAnim AnimationID
+			// Envelope follower: instant attack, decay ~87.5% per frame (~33ms)
+			// Smooths out frame-to-frame noise; mouth opens fast, closes gradually
+			if maxDev > micEnvelope {
+				micEnvelope = maxDev
+			} else {
+				micEnvelope -= micEnvelope >> 3
+			}
+
+			var candidateMouth AnimationID
 			switch {
-			case maxDev < 1000:
-				mouthAnim = Anim_MouthIdle
-			case maxDev < 3000:
-				mouthAnim = Anim_MouthOpen1
-			case maxDev < 6000:
-				mouthAnim = Anim_MouthOpen2
+			case micEnvelope < 6000:
+				candidateMouth = Anim_MouthIdle
+			case micEnvelope < 10000:
+				candidateMouth = Anim_MouthOpen1
+			case micEnvelope < 20000:
+				candidateMouth = Anim_MouthOpen2
 			default:
-				mouthAnim = Anim_MouthOpen3
+				candidateMouth = Anim_MouthOpen3
 			}
 
-			if debugLog && loopCounter%30 == 0 {
-				fmt.Printf("[%d] [MIC] maxDev=%d mouth=0x%02X\n",
-					Ts(), maxDev, int(mouthAnim))
+			// Symmetric debounce: any state change (up or down) requires
+			// micConfirmFrames consecutive frames at the new level before committing.
+			// Filters both AGC noise bursts and rapid bouncing between open states.
+			const micConfirmFrames = 5 // 5 × 33ms = ~165ms — tune if needed
+			if candidateMouth == pendingMouth {
+				if micDebounce < micConfirmFrames {
+					micDebounce++
+				}
+			} else {
+				pendingMouth = candidateMouth
+				micDebounce = 1
+			}
+			if micDebounce >= micConfirmFrames {
+				committedMouth = pendingMouth
+			}
+			mouthAnim := committedMouth
+
+			if mouthAnim != lastMouthAnim {
+				fmt.Printf("[%d] [MIC] mouth=0x%02X env=%d peak=%d\n",
+					Ts(), int(mouthAnim), micEnvelope, maxDev)
+				lastMouthAnim = mouthAnim
 			}
 
-			sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeIdle, mouthAnim)
+			// Blink timing mirrors case 0x00 (200ms blink, 3s inter-blink gap)
+			if micBlinkActive {
+				if nowMs-lastBlinkMs >= 200 {
+					micBlinkActive = false
+					lastBlinkMs = nowMs
+					micEyeAnim = Anim_EyeIdle
+				}
+			} else {
+				if nowMs-lastBlinkMs >= 3000 {
+					micBlinkActive = true
+					lastBlinkMs = nowMs
+					micEyeAnim = Anim_EyeBlink
+				}
+			}
+
+			sendPacket(Address_All, Cmd_DisplayAnim, micEyeAnim, mouthAnim)
 
 			select {
 			case code := <-radioChan:
@@ -323,7 +382,9 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			fmt.Printf("[%d] [REBOOT] hard reset NOW\n", Ts())
 			time.Sleep(50 * time.Millisecond) // let print flush
 			HardReset()
-			for { time.Sleep(time.Second) } // unreachable
+			for {
+				time.Sleep(time.Second)
+			} // unreachable
 
 		default:
 			fmt.Printf("[%d] Unknown Mode, resetting to 0x00\n", Ts())

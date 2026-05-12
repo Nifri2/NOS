@@ -46,7 +46,16 @@ const (
 	Anim_EyeBlink AnimationID = 0x01
 	Anim_MouthIdleLeft AnimationID = 0x02
 	Anim_MouthIdleRight AnimationID = 0x03
+	Anim_MouthYap1Left AnimationID = 0x04
+	Anim_MouthYap1Right AnimationID = 0x05
+	Anim_MouthYap2Left AnimationID = 0x06
+	Anim_MouthYap2Right AnimationID = 0x07
+	Anim_MouthYap3Left AnimationID = 0x08
+	Anim_MouthYap3Right AnimationID = 0x09
 	Anim_MouthIdle AnimationID = 0x10
+	Anim_MouthYap1 AnimationID = 0x11
+	Anim_MouthYap2 AnimationID = 0x12
+	Anim_MouthYap3 AnimationID = 0x13
 )
 
 // ANIMID_END
@@ -62,9 +71,15 @@ const (
 var animationMapping = map[Address]map[AnimationID]AnimationID{
 	Worker_0: { // Left side
 		Anim_MouthIdle: Anim_MouthIdleLeft,
+		Anim_MouthYap1: Anim_MouthYap1Left,
+		Anim_MouthYap2: Anim_MouthYap2Left,
+		Anim_MouthYap3: Anim_MouthYap3Left,
 	},
 	Worker_1: { // Right side
 		Anim_MouthIdle: Anim_MouthIdleRight,
+		Anim_MouthYap1: Anim_MouthYap1Right,
+		Anim_MouthYap2: Anim_MouthYap2Right,
+		Anim_MouthYap3: Anim_MouthYap3Right,
 	},
 }
 
