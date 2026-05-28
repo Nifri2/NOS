@@ -336,10 +336,14 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 	fmt.Printf("[%d] [ANIM] PIO init complete: eye=%v mouth=%v\n", Ts(), eyeOK, mouthOK)
 
 	// Fixed rendering buffers - allocated once, reused forever
-	eyeBuffer := make([]uint32, EyeFrameWidth*EyeFrameHeight)     // 256 pixels
-	mouthBuffer := make([]uint32, MouthFrameWidth*MouthFrameHeight) // 512 pixels
+	eyeBuffer := make([]uint32, EyeFrameWidth*EyeFrameHeight)      // 256 pixels × 4 bytes = 1024 bytes
+	mouthBuffer := make([]uint32, MouthFrameWidth*MouthFrameHeight) // 512 pixels × 4 bytes = 2048 bytes
 	fmt.Printf("[%d] [ANIM] eyeBuffer=%d mouthBuffer=%d totalRAM=%d bytes\n",
 		Ts(), len(eyeBuffer), len(mouthBuffer), (len(eyeBuffer)+len(mouthBuffer))*4)
+
+	// Transition snapshot buffers - store the "from" frame as raw GRB bytes, allocated once
+	eyeTransitionFrom := make([]byte, EyeFrameWidth*EyeFrameHeight*3)       // 768 bytes
+	mouthTransitionFrom := make([]byte, MouthFrameWidth*MouthFrameHeight*3)  // 1536 bytes
 
 	// Self-test: write black frames to verify strips work
 	fmt.Printf("[%d] [ANIM SELFTEST] Testing strips with black frames...\n", Ts())
@@ -405,6 +409,45 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 	var eyeFrameCounter int64
 	var mouthFrameCounter int64
 
+	// Transition state - eye
+	const eyeTransitionFrames = 15  // ~250ms at 60fps; tune per animation type if needed
+	const mouthTransitionFrames = 6 // ~100ms at 60fps; snappier for speech tracking
+
+	var eyeTransitioning bool
+	var eyeTransitionStep int
+	var eyeTransitionTarget *Animation
+
+	// Transition state - mouth
+	var mouthTransitioning bool
+	var mouthTransitionStep int
+	var mouthTransitionTarget *Animation
+
+	// lerpFrameInto blends two GRB byte frames into a uint32 render buffer.
+	// step ranges from 0 to totalSteps inclusive (step=0 → pure from, step=totalSteps → pure to).
+	// Uses integer smoothstep easing (no floats, no allocations).
+	// Smoothstep: s(t) = t²(3-2t) computed in fixed-point with 256 = 1.0
+	lerpFrameInto := func(dst []uint32, from []byte, to []byte, step, totalSteps, pixelCount int) {
+		for i := 0; i < pixelCount; i++ {
+			// Map step to [0, 256]
+			t := step * 256 / totalSteps
+			// Smoothstep in fixed-point: t²(768-2t)/65536 stays in [0, 256]
+			t = t * t * (768 - 2*t) / 65536
+
+			fg := int(from[i*3])
+			fr := int(from[i*3+1])
+			fb := int(from[i*3+2])
+			tg := int(to[i*3])
+			tr := int(to[i*3+1])
+			tb := int(to[i*3+2])
+
+			g := uint8(fg + (tg-fg)*t/256)
+			r := uint8(fr + (tr-fr)*t/256)
+			b := uint8(fb + (tb-fb)*t/256)
+
+			dst[i] = uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
+		}
+	}
+
 	fmt.Printf("[%d] [ANIM] Entering animation loop...\n", Ts())
 
 	// Canary goroutine - prints every 2s to prove animation goroutine is alive
@@ -424,6 +467,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 			fmt.Printf("[%d] [ANIM LOOP] iter=%d eyeFrame=%d mouthFrame=%d\n",
 				Ts(), loopIter, eyeFrameCounter, mouthFrameCounter)
 		}
+
 		// Check for new animation command (non-blocking)
 		select {
 		case update := <-animChan:
@@ -442,63 +486,175 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 		default:
 		}
 
-		// Write to eye strip if available (convert on demand into fixed buffer)
+		// Eye transition trigger - fires immediately when queued anim differs from current/target.
+		// Multi-frame animations (eye_blink etc.) switch instantly — the animation IS the effect.
+		// Single-frame static targets (eye_idle, eye_happy) get a smooth blend.
+		if queuedEyeAnim != nil {
+			if len(queuedEyeAnim.Frames) > 1 {
+				// Multi-frame target: immediate hard switch, cancel any in-progress blend
+				if queuedEyeAnim != currentEyeAnim {
+					currentEyeAnim = queuedEyeAnim
+					eyeFrameCounter = 0
+					eyeTransitioning = false
+					eyeTransitionTarget = nil
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Eye switch (animated): %s\n", Ts(), queuedEyeAnim.Name)
+					}
+				}
+			} else if eyeTransitioning && eyeTransitionTarget != nil && queuedEyeAnim != eyeTransitionTarget {
+				// Redirect mid-transition to new static target
+				for i := 0; i < EyeFrameWidth*EyeFrameHeight; i++ {
+					eyeTransitionFrom[i*3] = byte(eyeBuffer[i] >> 24)   // G
+					eyeTransitionFrom[i*3+1] = byte(eyeBuffer[i] >> 16) // R
+					eyeTransitionFrom[i*3+2] = byte(eyeBuffer[i] >> 8)  // B
+				}
+				eyeTransitionTarget = queuedEyeAnim
+				eyeTransitionStep = 0
+				if debugLog {
+					fmt.Printf("[%d] [ANIM] Eye transition redirect -> %s\n", Ts(), queuedEyeAnim.Name)
+				}
+			} else if !eyeTransitioning && currentEyeAnim != nil &&
+				len(currentEyeAnim.Frames) > 0 && queuedEyeAnim != currentEyeAnim {
+				// Start new smooth transition to static target
+				frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
+				copy(eyeTransitionFrom, currentEyeAnim.Frames[frameIdx])
+				eyeTransitionTarget = queuedEyeAnim
+				eyeTransitionStep = 0
+				eyeTransitioning = true
+				if debugLog {
+					fmt.Printf("[%d] [ANIM] Eye transition start: %s -> %s\n",
+						Ts(), currentEyeAnim.Name, queuedEyeAnim.Name)
+				}
+			}
+			queuedEyeAnim = nil
+		}
+
+		// Mouth transition trigger - same logic as eye.
+		// Multi-frame targets switch instantly; single-frame static targets blend smoothly.
+		if queuedMouthAnim != nil {
+			if len(queuedMouthAnim.Frames) > 1 {
+				// Multi-frame target: immediate hard switch
+				if queuedMouthAnim != currentMouthAnim {
+					currentMouthAnim = queuedMouthAnim
+					mouthFrameCounter = 0
+					mouthTransitioning = false
+					mouthTransitionTarget = nil
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Mouth switch (animated): %s\n", Ts(), queuedMouthAnim.Name)
+					}
+				}
+			} else if mouthTransitioning && mouthTransitionTarget != nil && queuedMouthAnim != mouthTransitionTarget {
+				// Redirect mid-transition to new static target
+				for i := 0; i < MouthFrameWidth*MouthFrameHeight; i++ {
+					mouthTransitionFrom[i*3] = byte(mouthBuffer[i] >> 24)   // G
+					mouthTransitionFrom[i*3+1] = byte(mouthBuffer[i] >> 16) // R
+					mouthTransitionFrom[i*3+2] = byte(mouthBuffer[i] >> 8)  // B
+				}
+				mouthTransitionTarget = queuedMouthAnim
+				mouthTransitionStep = 0
+				if debugLog {
+					fmt.Printf("[%d] [ANIM] Mouth transition redirect -> %s\n", Ts(), queuedMouthAnim.Name)
+				}
+			} else if !mouthTransitioning && currentMouthAnim != nil &&
+				len(currentMouthAnim.Frames) > 0 && queuedMouthAnim != currentMouthAnim {
+				// Start new smooth transition to static target
+				frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
+				copy(mouthTransitionFrom, currentMouthAnim.Frames[frameIdx])
+				mouthTransitionTarget = queuedMouthAnim
+				mouthTransitionStep = 0
+				mouthTransitioning = true
+				if debugLog {
+					fmt.Printf("[%d] [ANIM] Mouth transition start: %s -> %s\n",
+						Ts(), currentMouthAnim.Name, queuedMouthAnim.Name)
+				}
+			}
+			queuedMouthAnim = nil
+		}
+
+		// Eye rendering
 		if eyeOK && currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
-			frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
-			frameBytes := currentEyeAnim.Frames[frameIdx]
-			if len(frameBytes)/3 == EyeFrameWidth*EyeFrameHeight {
-				bytesToRawInto(eyeBuffer, frameBytes)
-				strip1.WriteRaw(eyeBuffer)
+			if eyeTransitioning {
+				// Render smoothstep-blended frame between "from" snapshot and target frame 0
+				if eyeTransitionTarget != nil && len(eyeTransitionTarget.Frames) > 0 {
+					toFrame := eyeTransitionTarget.Frames[0]
+					if len(eyeTransitionFrom)/3 == EyeFrameWidth*EyeFrameHeight &&
+						len(toFrame)/3 == EyeFrameWidth*EyeFrameHeight {
+						lerpFrameInto(eyeBuffer, eyeTransitionFrom, toFrame,
+							eyeTransitionStep, eyeTransitionFrames, EyeFrameWidth*EyeFrameHeight)
+						strip1.WriteRaw(eyeBuffer)
+					}
+				}
+				eyeTransitionStep++
+				if eyeTransitionStep > eyeTransitionFrames {
+					currentEyeAnim = eyeTransitionTarget
+					eyeFrameCounter = 0
+					eyeTransitioning = false
+					eyeTransitionTarget = nil
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Eye transition complete -> %s\n",
+							Ts(), currentEyeAnim.Name)
+					}
+				}
 			} else {
-				fmt.Printf("[%d] [ANIM SKIP eye] pixels=%d expected=%d name=%s frame=%d\n",
-					Ts(), len(frameBytes)/3, EyeFrameWidth*EyeFrameHeight, currentEyeAnim.Name, frameIdx)
+				// Normal frame playback
+				frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
+				frameBytes := currentEyeAnim.Frames[frameIdx]
+				if len(frameBytes)/3 == EyeFrameWidth*EyeFrameHeight {
+					bytesToRawInto(eyeBuffer, frameBytes)
+					strip1.WriteRaw(eyeBuffer)
+				} else {
+					fmt.Printf("[%d] [ANIM SKIP eye] pixels=%d expected=%d name=%s frame=%d\n",
+						Ts(), len(frameBytes)/3, EyeFrameWidth*EyeFrameHeight, currentEyeAnim.Name, frameIdx)
+				}
 			}
 		}
 
-		// Write to mouth strip if available (convert on demand into fixed buffer)
+		// Mouth rendering
 		if mouthOK && currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
-			frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
-			frameBytes := currentMouthAnim.Frames[frameIdx]
-			if len(frameBytes)/3 == MouthFrameWidth*MouthFrameHeight {
-				bytesToRawInto(mouthBuffer, frameBytes)
-				strip2.WriteRaw(mouthBuffer)
+			if mouthTransitioning {
+				// Render smoothstep-blended frame between "from" snapshot and target frame 0
+				if mouthTransitionTarget != nil && len(mouthTransitionTarget.Frames) > 0 {
+					toFrame := mouthTransitionTarget.Frames[0]
+					if len(mouthTransitionFrom)/3 == MouthFrameWidth*MouthFrameHeight &&
+						len(toFrame)/3 == MouthFrameWidth*MouthFrameHeight {
+						lerpFrameInto(mouthBuffer, mouthTransitionFrom, toFrame,
+							mouthTransitionStep, mouthTransitionFrames, MouthFrameWidth*MouthFrameHeight)
+						strip2.WriteRaw(mouthBuffer)
+					}
+				}
+				mouthTransitionStep++
+				if mouthTransitionStep > mouthTransitionFrames {
+					currentMouthAnim = mouthTransitionTarget
+					mouthFrameCounter = 0
+					mouthTransitioning = false
+					mouthTransitionTarget = nil
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Mouth transition complete -> %s\n",
+							Ts(), currentMouthAnim.Name)
+					}
+				}
 			} else {
-				fmt.Printf("[%d] [ANIM SKIP mouth] pixels=%d expected=%d name=%s frame=%d\n",
-					Ts(), len(frameBytes)/3, MouthFrameWidth*MouthFrameHeight, currentMouthAnim.Name, frameIdx)
+				// Normal frame playback
+				frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
+				frameBytes := currentMouthAnim.Frames[frameIdx]
+				if len(frameBytes)/3 == MouthFrameWidth*MouthFrameHeight {
+					bytesToRawInto(mouthBuffer, frameBytes)
+					strip2.WriteRaw(mouthBuffer)
+				} else {
+					fmt.Printf("[%d] [ANIM SKIP mouth] pixels=%d expected=%d name=%s frame=%d\n",
+						Ts(), len(frameBytes)/3, MouthFrameWidth*MouthFrameHeight, currentMouthAnim.Name, frameIdx)
+				}
 			}
 		}
 
 		// PIO handles latch timing internally - no manual reset delay needed
 
-		eyeFrameCounter++
-		mouthFrameCounter++
-
-		// Transition eye at end of cycle
-		if queuedEyeAnim != nil && currentEyeAnim != nil && len(currentEyeAnim.Frames) > 0 {
-			if eyeFrameCounter > 0 && (eyeFrameCounter%int64(len(currentEyeAnim.Frames)) == 0) {
-				if queuedEyeAnim != currentEyeAnim {
-					if debugLog {
-						fmt.Printf("[%d] [ANIM] Transitioning Eye to: %s\n", Ts(), queuedEyeAnim.Name)
-					}
-					currentEyeAnim = queuedEyeAnim
-					eyeFrameCounter = 0
-				}
-				queuedEyeAnim = nil
-			}
+		// Only advance frame counters when not transitioning; transition resets counter on completion
+		if !eyeTransitioning {
+			eyeFrameCounter++
 		}
-
-		// Transition mouth at end of cycle
-		if queuedMouthAnim != nil && currentMouthAnim != nil && len(currentMouthAnim.Frames) > 0 {
-			if mouthFrameCounter > 0 && (mouthFrameCounter%int64(len(currentMouthAnim.Frames)) == 0) {
-				if queuedMouthAnim != currentMouthAnim {
-					if debugLog {
-						fmt.Printf("[%d] [ANIM] Transitioning Mouth to: %s\n", Ts(), queuedMouthAnim.Name)
-					}
-					currentMouthAnim = queuedMouthAnim
-					mouthFrameCounter = 0
-				}
-				queuedMouthAnim = nil
-			}
+		if !mouthTransitioning {
+			mouthFrameCounter++
 		}
 
 		// ~60Hz frame rate cap (10ms was too fast, produced redundant WriteRaw calls)
