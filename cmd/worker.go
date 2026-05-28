@@ -486,12 +486,14 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 		default:
 		}
 
-		// Eye transition trigger - fires immediately when queued anim differs from current/target.
-		// Multi-frame animations (eye_blink etc.) switch instantly — the animation IS the effect.
-		// Single-frame static targets (eye_idle, eye_happy) get a smooth blend.
+		// Eye transition trigger. Three cases:
+		//   1. Multi-frame target (e.g. eye_blink): immediate hard switch — the animation IS the effect.
+		//   2. Multi-frame source, static target: hold until current animation cycle ends, then blend.
+		//      This lets the blink play through completely before returning to idle.
+		//   3. Static source, static target: smooth blend immediately (or redirect if mid-blend).
 		if queuedEyeAnim != nil {
 			if len(queuedEyeAnim.Frames) > 1 {
-				// Multi-frame target: immediate hard switch, cancel any in-progress blend
+				// Case 1: animated target — immediate hard switch, cancel any in-progress blend
 				if queuedEyeAnim != currentEyeAnim {
 					currentEyeAnim = queuedEyeAnim
 					eyeFrameCounter = 0
@@ -501,39 +503,62 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 						fmt.Printf("[%d] [ANIM] Eye switch (animated): %s\n", Ts(), queuedEyeAnim.Name)
 					}
 				}
-			} else if eyeTransitioning && eyeTransitionTarget != nil && queuedEyeAnim != eyeTransitionTarget {
-				// Redirect mid-transition to new static target
-				for i := 0; i < EyeFrameWidth*EyeFrameHeight; i++ {
-					eyeTransitionFrom[i*3] = byte(eyeBuffer[i] >> 24)   // G
-					eyeTransitionFrom[i*3+1] = byte(eyeBuffer[i] >> 16) // R
-					eyeTransitionFrom[i*3+2] = byte(eyeBuffer[i] >> 8)  // B
+				queuedEyeAnim = nil
+			} else if currentEyeAnim != nil && len(currentEyeAnim.Frames) > 1 {
+				// Case 2: animated source, static target — wait for cycle end
+				cycleLen := int64(len(currentEyeAnim.Frames))
+				if eyeFrameCounter > 0 && eyeFrameCounter%cycleLen == 0 {
+					// Cycle just completed: snapshot last displayed frame and start blend
+					for i := 0; i < EyeFrameWidth*EyeFrameHeight; i++ {
+						eyeTransitionFrom[i*3] = byte(eyeBuffer[i] >> 24)
+						eyeTransitionFrom[i*3+1] = byte(eyeBuffer[i] >> 16)
+						eyeTransitionFrom[i*3+2] = byte(eyeBuffer[i] >> 8)
+					}
+					eyeTransitionTarget = queuedEyeAnim
+					eyeTransitionStep = 0
+					eyeTransitioning = true
+					queuedEyeAnim = nil
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Eye transition start (post-cycle): -> %s\n",
+							Ts(), eyeTransitionTarget.Name)
+					}
 				}
-				eyeTransitionTarget = queuedEyeAnim
-				eyeTransitionStep = 0
-				if debugLog {
-					fmt.Printf("[%d] [ANIM] Eye transition redirect -> %s\n", Ts(), queuedEyeAnim.Name)
+				// Cycle not complete: keep queuedEyeAnim, revisit next frame
+			} else {
+				// Case 3: static source, static target — blend immediately
+				if eyeTransitioning && eyeTransitionTarget != nil && queuedEyeAnim != eyeTransitionTarget {
+					// Redirect mid-blend to new static target
+					for i := 0; i < EyeFrameWidth*EyeFrameHeight; i++ {
+						eyeTransitionFrom[i*3] = byte(eyeBuffer[i] >> 24)
+						eyeTransitionFrom[i*3+1] = byte(eyeBuffer[i] >> 16)
+						eyeTransitionFrom[i*3+2] = byte(eyeBuffer[i] >> 8)
+					}
+					eyeTransitionTarget = queuedEyeAnim
+					eyeTransitionStep = 0
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Eye transition redirect -> %s\n", Ts(), queuedEyeAnim.Name)
+					}
+				} else if !eyeTransitioning && currentEyeAnim != nil &&
+					len(currentEyeAnim.Frames) > 0 && queuedEyeAnim != currentEyeAnim {
+					// Start new smooth blend
+					frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
+					copy(eyeTransitionFrom, currentEyeAnim.Frames[frameIdx])
+					eyeTransitionTarget = queuedEyeAnim
+					eyeTransitionStep = 0
+					eyeTransitioning = true
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Eye transition start: %s -> %s\n",
+							Ts(), currentEyeAnim.Name, queuedEyeAnim.Name)
+					}
 				}
-			} else if !eyeTransitioning && currentEyeAnim != nil &&
-				len(currentEyeAnim.Frames) > 0 && queuedEyeAnim != currentEyeAnim {
-				// Start new smooth transition to static target
-				frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
-				copy(eyeTransitionFrom, currentEyeAnim.Frames[frameIdx])
-				eyeTransitionTarget = queuedEyeAnim
-				eyeTransitionStep = 0
-				eyeTransitioning = true
-				if debugLog {
-					fmt.Printf("[%d] [ANIM] Eye transition start: %s -> %s\n",
-						Ts(), currentEyeAnim.Name, queuedEyeAnim.Name)
-				}
+				queuedEyeAnim = nil
 			}
-			queuedEyeAnim = nil
 		}
 
-		// Mouth transition trigger - same logic as eye.
-		// Multi-frame targets switch instantly; single-frame static targets blend smoothly.
+		// Mouth transition trigger — same three-case logic as eye.
 		if queuedMouthAnim != nil {
 			if len(queuedMouthAnim.Frames) > 1 {
-				// Multi-frame target: immediate hard switch
+				// Case 1: animated target — immediate hard switch
 				if queuedMouthAnim != currentMouthAnim {
 					currentMouthAnim = queuedMouthAnim
 					mouthFrameCounter = 0
@@ -543,32 +568,53 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 						fmt.Printf("[%d] [ANIM] Mouth switch (animated): %s\n", Ts(), queuedMouthAnim.Name)
 					}
 				}
-			} else if mouthTransitioning && mouthTransitionTarget != nil && queuedMouthAnim != mouthTransitionTarget {
-				// Redirect mid-transition to new static target
-				for i := 0; i < MouthFrameWidth*MouthFrameHeight; i++ {
-					mouthTransitionFrom[i*3] = byte(mouthBuffer[i] >> 24)   // G
-					mouthTransitionFrom[i*3+1] = byte(mouthBuffer[i] >> 16) // R
-					mouthTransitionFrom[i*3+2] = byte(mouthBuffer[i] >> 8)  // B
+				queuedMouthAnim = nil
+			} else if currentMouthAnim != nil && len(currentMouthAnim.Frames) > 1 {
+				// Case 2: animated source, static target — wait for cycle end
+				cycleLen := int64(len(currentMouthAnim.Frames))
+				if mouthFrameCounter > 0 && mouthFrameCounter%cycleLen == 0 {
+					for i := 0; i < MouthFrameWidth*MouthFrameHeight; i++ {
+						mouthTransitionFrom[i*3] = byte(mouthBuffer[i] >> 24)
+						mouthTransitionFrom[i*3+1] = byte(mouthBuffer[i] >> 16)
+						mouthTransitionFrom[i*3+2] = byte(mouthBuffer[i] >> 8)
+					}
+					mouthTransitionTarget = queuedMouthAnim
+					mouthTransitionStep = 0
+					mouthTransitioning = true
+					queuedMouthAnim = nil
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Mouth transition start (post-cycle): -> %s\n",
+							Ts(), mouthTransitionTarget.Name)
+					}
 				}
-				mouthTransitionTarget = queuedMouthAnim
-				mouthTransitionStep = 0
-				if debugLog {
-					fmt.Printf("[%d] [ANIM] Mouth transition redirect -> %s\n", Ts(), queuedMouthAnim.Name)
+				// Cycle not complete: keep queuedMouthAnim
+			} else {
+				// Case 3: static source, static target — blend immediately
+				if mouthTransitioning && mouthTransitionTarget != nil && queuedMouthAnim != mouthTransitionTarget {
+					for i := 0; i < MouthFrameWidth*MouthFrameHeight; i++ {
+						mouthTransitionFrom[i*3] = byte(mouthBuffer[i] >> 24)
+						mouthTransitionFrom[i*3+1] = byte(mouthBuffer[i] >> 16)
+						mouthTransitionFrom[i*3+2] = byte(mouthBuffer[i] >> 8)
+					}
+					mouthTransitionTarget = queuedMouthAnim
+					mouthTransitionStep = 0
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Mouth transition redirect -> %s\n", Ts(), queuedMouthAnim.Name)
+					}
+				} else if !mouthTransitioning && currentMouthAnim != nil &&
+					len(currentMouthAnim.Frames) > 0 && queuedMouthAnim != currentMouthAnim {
+					frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
+					copy(mouthTransitionFrom, currentMouthAnim.Frames[frameIdx])
+					mouthTransitionTarget = queuedMouthAnim
+					mouthTransitionStep = 0
+					mouthTransitioning = true
+					if debugLog {
+						fmt.Printf("[%d] [ANIM] Mouth transition start: %s -> %s\n",
+							Ts(), currentMouthAnim.Name, queuedMouthAnim.Name)
+					}
 				}
-			} else if !mouthTransitioning && currentMouthAnim != nil &&
-				len(currentMouthAnim.Frames) > 0 && queuedMouthAnim != currentMouthAnim {
-				// Start new smooth transition to static target
-				frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
-				copy(mouthTransitionFrom, currentMouthAnim.Frames[frameIdx])
-				mouthTransitionTarget = queuedMouthAnim
-				mouthTransitionStep = 0
-				mouthTransitioning = true
-				if debugLog {
-					fmt.Printf("[%d] [ANIM] Mouth transition start: %s -> %s\n",
-						Ts(), currentMouthAnim.Name, queuedMouthAnim.Name)
-				}
+				queuedMouthAnim = nil
 			}
-			queuedMouthAnim = nil
 		}
 
 		// Eye rendering
