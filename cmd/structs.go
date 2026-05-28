@@ -64,13 +64,6 @@ const (
 
 // ANIMID_END
 
-// Mouth open states for live mic mode (logical IDs, animations pending)
-const (
-	Anim_MouthOpen1 AnimationID = 0x11
-	Anim_MouthOpen2 AnimationID = 0x12
-	Anim_MouthOpen3 AnimationID = 0x13
-)
-
 // MAPPING_START
 var animationMapping = map[Address]map[AnimationID]AnimationID{
 	Worker_0: { // Left side

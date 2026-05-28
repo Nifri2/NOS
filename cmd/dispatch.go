@@ -64,20 +64,6 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 1500})
 	fmt.Printf("[%d] [DISP] Watchdog timeout: 1500ms\n", Ts())
 
-	// Configure GP26 (ADC0) for MAX9814 microphone input
-	// InitADC must be called first — it sets ADC_CS.EN=1; without it
-	// adc.Get() polls ADC_CS.READY forever (peripheral disabled at boot).
-	machine.InitADC()
-	adcPin := machine.GP26
-	adcPin.Configure(machine.PinConfig{Mode: machine.PinAnalog})
-	adc := machine.ADC{Pin: adcPin}
-	adc.Configure(machine.ADCConfig{})
-	fmt.Printf("[%d] ADC configured on GP26 (ADC0) for MAX9814 mic\n", Ts())
-
-	fmt.Printf("[%d] ADC test read...\n", Ts())
-	testSample := adc.Get()
-	fmt.Printf("[%d] ADC test: %d (center ~32768)\n", Ts(), testSample)
-
 	// Radio Channel
 	radioChan := make(chan byte, 10)
 
@@ -125,9 +111,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Radio handling goroutine with recoverable supervisor
 	go runRadioLogic(radioChan)
 
-	// Independent state variables for eye and mouth
 	var eyeMode byte = 0x00  // 0x00=idle_blink, 0x01=happy, 0x02=excited
-	var mouthMode byte = 0x00 // 0x00=idle, 0x01=talking
 
 	// Blink state machine (active when eyeMode == 0x00)
 	var nextBlinkMs int64 = Ts() + 3000
@@ -173,12 +157,6 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		}
 	}
 
-	// Returns the mouth animation for eye-only state-change packets.
-	// Talking mode handles its own mouth sampling; for all other senders, idle is correct.
-	currentMouthAnim := func() AnimationID {
-		return Anim_MouthIdle
-	}
-
 	// Keepalive Goroutine - broadcast to all workers
 	go func() {
 		for {
@@ -192,9 +170,6 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	lastLedToggleMs := Ts()
 	lastHeartbeatMs := Ts()
 	ledState := false
-
-	var loopCounter int
-	var lastMouthAnim AnimationID = 0xFF // invalid sentinel for talking mode state-change log
 
 	fmt.Printf("[%d] Entering main dispatcher loop...\n", Ts())
 
@@ -215,8 +190,8 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		// Heartbeat log every 10 seconds with counters
 		if nowMs-lastHeartbeatMs >= 10000 {
 			writerStuckSec := int((nowMs - lastTxWriteCompletedMs) / 1000)
-			fmt.Printf("[%d] [HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d eye=0x%02X mouth=0x%02X writerStuckSec=%d\n",
-				nowMs, txQueued, txWritten, txDropped, radioEvents, eyeMode, mouthMode, writerStuckSec)
+			fmt.Printf("[%d] [HB DISP] txQueued=%d txWritten=%d txDropped=%d radio=%d eye=0x%02X writerStuckSec=%d\n",
+				nowMs, txQueued, txWritten, txDropped, radioEvents, eyeMode, writerStuckSec)
 			if writerStuckSec > 10 {
 				fmt.Printf("[%d] [ALERT] UART writer appears stuck for %d seconds!\n", nowMs, writerStuckSec)
 			}
@@ -232,28 +207,27 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			radioEvents++
 			switch code {
 			case 0x04: // A+A: mouth idle
-				mouthMode = 0x00
 				sendPacket(Address_All, Cmd_DisplayAnim, currentEyeAnim(), Anim_MouthIdle)
 				fmt.Printf("[%d] Mouth -> idle\n", Ts())
-			case 0x05: // A+B: mouth talking
-				mouthMode = 0x01
-				lastMouthAnim = 0xFF // reset state-change log sentinel
-				fmt.Printf("[%d] Mouth -> talking\n", Ts())
+			case 0x05: // A+B: reserved (was mouth talking via mic)
+				if debugLog {
+					fmt.Printf("[%d] A+B: reserved\n", Ts())
+				}
 			case 0x08: // B+A: eye idle blink
 				eyeMode = 0x00
 				isBlinking = false
 				nextBlinkMs = nowMs + 3000
-				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeIdle, currentMouthAnim())
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
 				fmt.Printf("[%d] Eyes -> idle blink\n", Ts())
 			case 0x09: // B+B: happy eyes
 				eyeMode = 0x01
 				isBlinking = false
-				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeHappy, currentMouthAnim())
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeHappy, Anim_MouthIdle)
 				fmt.Printf("[%d] Eyes -> happy\n", Ts())
 			case 0x0A: // B+C: excited eyes
 				eyeMode = 0x02
 				isBlinking = false
-				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeExcited, currentMouthAnim())
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeExcited, Anim_MouthIdle)
 				fmt.Printf("[%d] Eyes -> excited\n", Ts())
 			case 0x13: // D+D: reboot
 				fmt.Printf("[%d] [REBOOT] D+D\n", Ts())
@@ -278,65 +252,22 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				// Blink finished — return to idle
 				isBlinking = false
 				nextBlinkMs = nowMs + 3000
-				sendPacket(Worker_0, Cmd_DisplayAnim, Anim_EyeIdle, currentMouthAnim())
-				sendPacket(Worker_1, Cmd_DisplayAnim, Anim_EyeIdle, currentMouthAnim())
+				sendPacket(Worker_0, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
+				sendPacket(Worker_1, Cmd_DisplayAnim, Anim_EyeIdle, Anim_MouthIdle)
 			} else if !isBlinking && nowMs >= nextBlinkMs {
 				// Time to blink
 				isBlinking = true
 				blinkEndMs = nowMs + 200
-				sendPacket(Worker_0, Cmd_DisplayAnim, Anim_EyeBlink, currentMouthAnim())
-				sendPacket(Worker_1, Cmd_DisplayAnim, Anim_EyeBlink, currentMouthAnim())
+				sendPacket(Worker_0, Cmd_DisplayAnim, Anim_EyeBlink, Anim_MouthIdle)
+				sendPacket(Worker_1, Cmd_DisplayAnim, Anim_EyeBlink, Anim_MouthIdle)
 			}
 		case 0x01: // happy — static, initial send handled at mode switch
 		case 0x02: // excited — static, initial send handled at mode switch
 		}
 
-		// Mouth state machine
-		switch mouthMode {
-		case 0x00: // idle — static, initial send handled at mode switch
-		case 0x01: // talking — sample mic and send mouth state
-			const adcCenter = 32768 // TinyGo normalises RP2350 12-bit ADC to 16-bit
-			var maxDev uint16
-			for i := 0; i < 64; i++ {
-				sample := adc.Get()
-				var dev uint16
-				if sample > adcCenter {
-					dev = sample - adcCenter
-				} else {
-					dev = adcCenter - sample
-				}
-				if dev > maxDev {
-					maxDev = dev
-				}
-			}
-
-			var mouthAnim AnimationID
-			switch {
-			case maxDev < 1000:
-				mouthAnim = Anim_MouthIdle
-			case maxDev < 3000:
-				mouthAnim = Anim_MouthOpen1
-			case maxDev < 6000:
-				mouthAnim = Anim_MouthOpen2
-			default:
-				mouthAnim = Anim_MouthOpen3
-			}
-
-			sendPacket(Address_All, Cmd_DisplayAnim, currentEyeAnim(), mouthAnim)
-
-			if mouthAnim != lastMouthAnim {
-				fmt.Printf("[%d] [MIC] mouth=0x%02X maxDev=%d\n", Ts(), int(mouthAnim), maxDev)
-				lastMouthAnim = mouthAnim
-			}
-			if debugLog && loopCounter%30 == 0 {
-				fmt.Printf("[%d] [MIC dbg] maxDev=%d mouth=0x%02X\n", Ts(), maxDev, int(mouthAnim))
-			}
-		}
-
-		// ~30Hz tick rate (matches mic update rate, fine for blink timing)
+		// ~30Hz tick rate
 		time.Sleep(33 * time.Millisecond)
 		machine.Watchdog.Update()
-		loopCounter++
 	}
 }
 
