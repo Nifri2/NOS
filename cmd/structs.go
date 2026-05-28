@@ -53,10 +53,13 @@ const (
 	Anim_MouthYap2Right AnimationID = 0x08
 	Anim_MouthYap3Left AnimationID = 0x09
 	Anim_MouthYap3Right AnimationID = 0x0A
+	Anim_EyeExcitedLeft AnimationID = 0x0B
+	Anim_EyeExcitedRight AnimationID = 0x0C
 	Anim_MouthIdle AnimationID = 0x10
 	Anim_MouthYap1 AnimationID = 0x11
 	Anim_MouthYap2 AnimationID = 0x12
 	Anim_MouthYap3 AnimationID = 0x13
+	Anim_EyeExcited AnimationID = 0x14
 )
 
 // ANIMID_END
@@ -75,12 +78,14 @@ var animationMapping = map[Address]map[AnimationID]AnimationID{
 		Anim_MouthYap1: Anim_MouthYap1Left,
 		Anim_MouthYap2: Anim_MouthYap2Left,
 		Anim_MouthYap3: Anim_MouthYap3Left,
+		Anim_EyeExcited: Anim_EyeExcitedLeft,
 	},
 	Worker_1: { // Right side
 		Anim_MouthIdle: Anim_MouthIdleRight,
 		Anim_MouthYap1: Anim_MouthYap1Right,
 		Anim_MouthYap2: Anim_MouthYap2Right,
 		Anim_MouthYap3: Anim_MouthYap3Right,
+		Anim_EyeExcited: Anim_EyeExcitedRight,
 	},
 }
 

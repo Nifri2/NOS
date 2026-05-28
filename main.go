@@ -43,6 +43,12 @@ var mouthYap3LeftData []byte
 //go:embed animations/mouth_yap_3_right.animbyte
 var mouthYap3RightData []byte
 
+//go:embed animations/eye_excited_left.animbyte
+var eyeExcitedLeftData []byte
+
+//go:embed animations/eye_excited_right.animbyte
+var eyeExcitedRightData []byte
+
 // EMBED_END
 
 // buildRole and buildAddress are set at compile time via -ldflags
@@ -129,6 +135,16 @@ func main() {
 		fmt.Println("Error loading mouth_yap_3_right:", err)
 	}
 
+	eyeExcitedLeftAnim, err := cmd.LoadAnimation(eyeExcitedLeftData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_excited_left")
+	if err != nil {
+		fmt.Println("Error loading eye_excited_left:", err)
+	}
+
+	eyeExcitedRightAnim, err := cmd.LoadAnimation(eyeExcitedRightData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_excited_right")
+	if err != nil {
+		fmt.Println("Error loading eye_excited_right:", err)
+	}
+
 	// LOAD_END
 
 	// Populate global array in cmd package
@@ -166,6 +182,12 @@ func main() {
 	}
 	if mouthYap3RightAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap3RightAnim)
+	}
+	if eyeExcitedLeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeExcitedLeftAnim)
+	}
+	if eyeExcitedRightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeExcitedRightAnim)
 	}
 	// APPEND_END
 

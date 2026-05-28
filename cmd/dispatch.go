@@ -126,7 +126,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	go runRadioLogic(radioChan)
 
 	// Independent state variables for eye and mouth
-	var eyeMode byte = 0x00  // 0x00=idle_blink, 0x01=happy
+	var eyeMode byte = 0x00  // 0x00=idle_blink, 0x01=happy, 0x02=excited
 	var mouthMode byte = 0x00 // 0x00=idle, 0x01=talking
 
 	// Blink state machine (active when eyeMode == 0x00)
@@ -163,6 +163,8 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		switch eyeMode {
 		case 0x01:
 			return Anim_EyeHappy
+		case 0x02:
+			return Anim_EyeExcited
 		default:
 			if isBlinking {
 				return Anim_EyeBlink
@@ -248,6 +250,11 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				isBlinking = false
 				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeHappy, currentMouthAnim())
 				fmt.Printf("[%d] Eyes -> happy\n", Ts())
+			case 0x0A: // B+C: excited eyes
+				eyeMode = 0x02
+				isBlinking = false
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeExcited, currentMouthAnim())
+				fmt.Printf("[%d] Eyes -> excited\n", Ts())
 			case 0x13: // D+D: reboot
 				fmt.Printf("[%d] [REBOOT] D+D\n", Ts())
 				sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
@@ -281,6 +288,7 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				sendPacket(Worker_1, Cmd_DisplayAnim, Anim_EyeBlink, currentMouthAnim())
 			}
 		case 0x01: // happy — static, initial send handled at mode switch
+		case 0x02: // excited — static, initial send handled at mode switch
 		}
 
 		// Mouth state machine

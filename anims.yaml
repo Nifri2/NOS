@@ -163,6 +163,34 @@ animations:
     matrix_height: 16
     brightness: 0.2
 
+  - name: eye_excited_left
+    id: 0x0B
+    logical_id: 0x14
+    side: left
+    source: eye_happy.anim
+    type: eye
+    embed: true
+    rotation: 0
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: eye_excited_right
+    id: 0x0C
+    logical_id: 0x14
+    side: right
+    source: eye_happy.anim
+    type: eye
+    embed: true
+    rotation: 180
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
   # === Logical animations (for protocol, not embedded) ===
   - name: mouth_idle
     id: 0x10
@@ -178,4 +206,8 @@ animations:
 
   - name: mouth_yap_3
     id: 0x13
+    embed: false
+
+  - name: eye_excited
+    id: 0x14
     embed: false
