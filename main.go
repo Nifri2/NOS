@@ -22,6 +22,9 @@ var mouthIdleLeftData []byte
 //go:embed animations/mouth_idle_right.animbyte
 var mouthIdleRightData []byte
 
+//go:embed animations/eye_happy.animbyte
+var eyeHappyData []byte
+
 //go:embed animations/mouth_yap_1_left.animbyte
 var mouthYap1LeftData []byte
 
@@ -91,6 +94,11 @@ func main() {
 		fmt.Println("Error loading mouth_idle_right:", err)
 	}
 
+	eyeHappyAnim, err := cmd.LoadAnimation(eyeHappyData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_happy")
+	if err != nil {
+		fmt.Println("Error loading eye_happy:", err)
+	}
+
 	mouthYap1LeftAnim, err := cmd.LoadAnimation(mouthYap1LeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_yap_1_left")
 	if err != nil {
 		fmt.Println("Error loading mouth_yap_1_left:", err)
@@ -137,6 +145,9 @@ func main() {
 	}
 	if mouthIdleRightAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthIdleRightAnim)
+	}
+	if eyeHappyAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeHappyAnim)
 	}
 	if mouthYap1LeftAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthYap1LeftAnim)

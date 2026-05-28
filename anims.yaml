@@ -67,8 +67,20 @@ animations:
     matrix_height: 16
     brightness: 0.2
 
-  - name: mouth_yap_1_left
+  - name: eye_happy
     id: 0x04
+    source: eye_happy.anim
+    type: eye
+    embed: true
+    rotation: 270
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_yap_1_left
+    id: 0x05
     logical_id: 0x11
     side: left
     source: mouth_yap_1.anim
@@ -82,7 +94,7 @@ animations:
     brightness: 0.2
 
   - name: mouth_yap_1_right
-    id: 0x05
+    id: 0x06
     logical_id: 0x11
     side: right
     source: mouth_yap_1.anim
@@ -96,7 +108,7 @@ animations:
     brightness: 0.2
 
   - name: mouth_yap_2_left
-    id: 0x06
+    id: 0x07
     logical_id: 0x12
     side: left
     source: mouth_yap_2.anim
@@ -110,7 +122,7 @@ animations:
     brightness: 0.2
 
   - name: mouth_yap_2_right
-    id: 0x07
+    id: 0x08
     logical_id: 0x12
     side: right
     source: mouth_yap_2.anim
@@ -124,7 +136,7 @@ animations:
     brightness: 0.2
 
   - name: mouth_yap_3_left
-    id: 0x08
+    id: 0x09
     logical_id: 0x13
     side: left
     source: mouth_yap_3.anim
@@ -138,7 +150,7 @@ animations:
     brightness: 0.2
 
   - name: mouth_yap_3_right
-    id: 0x09
+    id: 0x0A
     logical_id: 0x13
     side: right
     source: mouth_yap_3.anim
