@@ -69,6 +69,14 @@ var mouthStareRightData []byte
 
 // EMBED_END
 
+// Insignia is embedded out-of-band: the anims.yaml generator owns the
+// EMBED/LOAD/APPEND blocks above, but the HUD board needs a single static
+// frame that has no left/right variants and no logical/protocol ID. Keeping
+// it here avoids reshuffling every animation ID just to add one extra entry.
+//
+//go:embed animations/nifri.animbyte
+var insigniaData []byte
+
 // buildRole and buildAddress are set at compile time via -ldflags
 // e.g. -ldflags="-X main.buildRole=worker -X main.buildAddress=worker-0"
 var (
@@ -257,6 +265,13 @@ func main() {
 	}
 	// APPEND_END
 
+	// Insignia frame for the HUD board (out-of-band, see embed declaration above).
+	if insigniaAnim, err := cmd.LoadAnimation(insigniaData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "insignia"); err != nil {
+		fmt.Println("Error loading insignia:", err)
+	} else if insigniaAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, insigniaAnim)
+	}
+
 	// Blink LED based on role - visible "I am alive" indicator BEFORE serial
 	// Phase 1: Quick role identification blinks
 	switch config.Role {
@@ -298,6 +313,8 @@ func main() {
 
 	case cmd.Worker:
 		cmd.RunWorker(config, uart, led)
+	case cmd.HUD:
+		cmd.RunHUD(config, uart, led)
 	}
 
 }

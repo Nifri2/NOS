@@ -12,6 +12,7 @@ type Role int
 const (
 	Dispatcher Role = 0x00 + iota
 	Worker
+	HUD
 )
 
 type Address int
@@ -38,6 +39,7 @@ const (
 	Cmd_Reboot              // 0x05
 	Cmd_DayMode             // 0x06
 	Cmd_NightMode           // 0x07
+	Cmd_Battery             // 0x08
 )
 
 // DayModeBrightnessPercent is the runtime RGB multiplier applied by workers
@@ -117,7 +119,11 @@ func MapAnimation(addr Address, id AnimationID) int {
 // Complete Protocol Packet:
 // [Header(0xAA), Address, Command, AnimID_Eye, AnimID_Mouth, Checksum]
 // Checksum = CRC-8/MAXIM of [Address, Command, AnimID_Eye, AnimID_Mouth]
-// Commands: NoOp=0x00 LedOn=0x01 LedOff=0x02 DisplayAnim=0x03 Ping=0x04 Reboot=0x05 DayMode=0x06 NightMode=0x07
+// Commands: NoOp=0x00 LedOn=0x01 LedOff=0x02 DisplayAnim=0x03 Ping=0x04 Reboot=0x05 DayMode=0x06 NightMode=0x07 Battery=0x08
+//
+// Cmd_Battery payload reuses the eye/mouth slots: eye byte = pack voltage in
+// deci-volts (7.4V -> 74), mouth byte = charge percent (0-100). Broadcast by the
+// dispatcher; the HUD board displays it.
 
 type Settings struct {
 	Role    Role

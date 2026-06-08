@@ -173,6 +173,22 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 		}
 	}()
 
+	// Battery telemetry - the dispatcher owns the battery rail, reads the ADC and
+	// broadcasts the result so the HUD board can display it. Payload reuses the
+	// eye/mouth slots: eye = deci-volts (7.4V -> 74), mouth = percent (0-100).
+	InitBattery()
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			v, pct := ReadBattery()
+			deci := uint8(v*10 + 0.5)
+			sendPacket(Address_All, Cmd_Battery, AnimationID(deci), AnimationID(pct))
+			if debugLog {
+				fmt.Printf("[%d] [BATT] %d.%dV %d%%\n", Ts(), deci/10, deci%10, pct)
+			}
+		}
+	}()
+
 	// 1Hz LED heartbeat and 10s heartbeat log (int64 ms to avoid time.Time allocations)
 	lastLedToggleMs := Ts()
 	lastHeartbeatMs := Ts()

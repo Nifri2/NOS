@@ -63,6 +63,12 @@ tasks:
       - task: _build
         vars: {ROLE: worker, ADDRESS: worker-3}
 
+  build:hud:
+    desc: "Builds OLED HUD firmware (runs on the Worker_2 board as a passive bus sniffer)"
+    cmds:
+      - task: _build
+        vars: {ROLE: hud, ADDRESS: worker-2}
+
   build:all:
     desc: "Builds all firmwares"
     cmds:
@@ -71,6 +77,7 @@ tasks:
       - task: build:worker-1
       - task: build:worker-2
       - task: build:worker-3
+      - task: build:hud
 
   # Debug builds (with verbose logging)
   build:dispatcher:debug:
@@ -102,6 +109,12 @@ tasks:
     cmds:
       - task: _build
         vars: {ROLE: worker, ADDRESS: worker-3, DEBUG: "true"}
+
+  build:hud:debug:
+    desc: "Builds OLED HUD firmware with debug logging"
+    cmds:
+      - task: _build
+        vars: {ROLE: hud, ADDRESS: worker-2, DEBUG: "true"}
 
   build:all:debug:
     desc: "Builds all firmwares with debug logging"
@@ -143,6 +156,12 @@ tasks:
       - task: _flash
         vars: {ROLE: worker, ADDRESS: worker-3}
 
+  flash:hud:
+    desc: "Flashes OLED HUD firmware (Worker_2 board)"
+    cmds:
+      - task: _flash
+        vars: {ROLE: hud, ADDRESS: worker-2}
+
   # Flash tasks (debug)
   flash:dispatcher:debug:
     desc: "Flashes dispatcher firmware with debug logging"
@@ -173,6 +192,12 @@ tasks:
     cmds:
       - task: _flash
         vars: {ROLE: worker, ADDRESS: worker-3, DEBUG: "true"}
+
+  flash:hud:debug:
+    desc: "Flashes OLED HUD firmware with debug logging (Worker_2 board)"
+    cmds:
+      - task: _flash
+        vars: {ROLE: hud, ADDRESS: worker-2, DEBUG: "true"}
 
   monitor:
     desc: "Attach Monitor to connected pi"

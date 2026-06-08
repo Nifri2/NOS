@@ -90,6 +90,8 @@ func ParseRole(r string) Role {
 	switch r {
 	case "worker":
 		return Worker
+	case "hud":
+		return HUD
 	default:
 		return Dispatcher
 	}
