@@ -49,6 +49,24 @@ var eyeExcitedLeftData []byte
 //go:embed animations/eye_excited_right.animbyte
 var eyeExcitedRightData []byte
 
+//go:embed animations/eye_flushed.animbyte
+var eyeFlushedData []byte
+
+//go:embed animations/eye_stare.animbyte
+var eyeStareData []byte
+
+//go:embed animations/mouth_flushed_left.animbyte
+var mouthFlushedLeftData []byte
+
+//go:embed animations/mouth_flushed_right.animbyte
+var mouthFlushedRightData []byte
+
+//go:embed animations/mouth_stare_left.animbyte
+var mouthStareLeftData []byte
+
+//go:embed animations/mouth_stare_right.animbyte
+var mouthStareRightData []byte
+
 // EMBED_END
 
 // buildRole and buildAddress are set at compile time via -ldflags
@@ -145,6 +163,36 @@ func main() {
 		fmt.Println("Error loading eye_excited_right:", err)
 	}
 
+	eyeFlushedAnim, err := cmd.LoadAnimation(eyeFlushedData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_flushed")
+	if err != nil {
+		fmt.Println("Error loading eye_flushed:", err)
+	}
+
+	eyeStareAnim, err := cmd.LoadAnimation(eyeStareData, cmd.EyeFrameWidth, cmd.EyeFrameHeight, "eye_stare")
+	if err != nil {
+		fmt.Println("Error loading eye_stare:", err)
+	}
+
+	mouthFlushedLeftAnim, err := cmd.LoadAnimation(mouthFlushedLeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_flushed_left")
+	if err != nil {
+		fmt.Println("Error loading mouth_flushed_left:", err)
+	}
+
+	mouthFlushedRightAnim, err := cmd.LoadAnimation(mouthFlushedRightData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_flushed_right")
+	if err != nil {
+		fmt.Println("Error loading mouth_flushed_right:", err)
+	}
+
+	mouthStareLeftAnim, err := cmd.LoadAnimation(mouthStareLeftData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_stare_left")
+	if err != nil {
+		fmt.Println("Error loading mouth_stare_left:", err)
+	}
+
+	mouthStareRightAnim, err := cmd.LoadAnimation(mouthStareRightData, cmd.MouthFrameWidth, cmd.MouthFrameHeight, "mouth_stare_right")
+	if err != nil {
+		fmt.Println("Error loading mouth_stare_right:", err)
+	}
+
 	// LOAD_END
 
 	// Populate global array in cmd package
@@ -188,6 +236,24 @@ func main() {
 	}
 	if eyeExcitedRightAnim != nil {
 		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeExcitedRightAnim)
+	}
+	if eyeFlushedAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeFlushedAnim)
+	}
+	if eyeStareAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, eyeStareAnim)
+	}
+	if mouthFlushedLeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthFlushedLeftAnim)
+	}
+	if mouthFlushedRightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthFlushedRightAnim)
+	}
+	if mouthStareLeftAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthStareLeftAnim)
+	}
+	if mouthStareRightAnim != nil {
+		cmd.LoadedAnimations = append(cmd.LoadedAnimations, mouthStareRightAnim)
 	}
 	// APPEND_END
 

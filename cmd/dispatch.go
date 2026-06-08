@@ -111,12 +111,15 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Radio handling goroutine with recoverable supervisor
 	go runRadioLogic(radioChan)
 
-	var eyeMode byte = 0x00  // 0x00=idle_blink, 0x01=happy, 0x02=excited
+	var eyeMode byte = 0x00 // 0x00=idle_blink, 0x01=happy, 0x02=excited, 0x03=stare, 0x04=flushed
 
 	// Blink state machine (active when eyeMode == 0x00)
 	var nextBlinkMs int64 = Ts() + 3000
 	var blinkEndMs int64 = 0
 	var isBlinking bool = false
+
+	// Day/night brightness mode — night is the boot default
+	var isDayMode bool = false
 
 	// Helper to send UART packet via channel (zero allocation in hot path)
 	sendPacket := func(addr Address, cmd Command, eye, mouth AnimationID) {
@@ -149,6 +152,10 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 			return Anim_EyeHappy
 		case 0x02:
 			return Anim_EyeExcited
+		case 0x03:
+			return Anim_EyeStare
+		case 0x04:
+			return Anim_EyeFlushed
 		default:
 			if isBlinking {
 				return Anim_EyeBlink
@@ -229,13 +236,24 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 				isBlinking = false
 				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeExcited, Anim_MouthIdle)
 				fmt.Printf("[%d] Eyes -> excited\n", Ts())
-			case 0x13: // D+D: reboot
-				fmt.Printf("[%d] [REBOOT] D+D\n", Ts())
-				sendPacket(Address_All, Cmd_Reboot, Anim_EyeIdle, Anim_MouthIdle)
-				time.Sleep(500 * time.Millisecond)
-				HardReset()
-				for {
-					time.Sleep(time.Second)
+			case 0x0D: // C+B: stare animation set (eye + mouth)
+				eyeMode = 0x03
+				isBlinking = false
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeStare, Anim_MouthStare)
+				fmt.Printf("[%d] Set -> stare\n", Ts())
+			case 0x0E: // C+C: flushed animation set (eye + mouth)
+				eyeMode = 0x04
+				isBlinking = false
+				sendPacket(Address_All, Cmd_DisplayAnim, Anim_EyeFlushed, Anim_MouthFlushed)
+				fmt.Printf("[%d] Set -> flushed\n", Ts())
+			case 0x13: // D+D: toggle day/night brightness mode
+				isDayMode = !isDayMode
+				if isDayMode {
+					sendPacket(Address_All, Cmd_DayMode, 0, 0)
+					fmt.Printf("[%d] Mode -> day (+%d%%)\n", Ts(), DayModeBrightnessPercent-100)
+				} else {
+					sendPacket(Address_All, Cmd_NightMode, 0, 0)
+					fmt.Printf("[%d] Mode -> night\n", Ts())
 				}
 			default:
 				if debugLog {

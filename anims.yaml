@@ -41,7 +41,7 @@ animations:
   # === Mouth animations (with left/right variants) ===
   - name: mouth_idle_left
     id: 0x02
-    logical_id: 0x10
+    logical_id: 0x13
     side: left
     source: mouth_idle.anim
     type: mouth
@@ -55,7 +55,7 @@ animations:
 
   - name: mouth_idle_right
     id: 0x03
-    logical_id: 0x10
+    logical_id: 0x13
     side: right
     source: mouth_idle.anim
     type: mouth
@@ -81,7 +81,7 @@ animations:
 
   - name: mouth_yap_1_left
     id: 0x05
-    logical_id: 0x11
+    logical_id: 0x14
     side: left
     source: mouth_yap_1.anim
     type: mouth
@@ -95,7 +95,7 @@ animations:
 
   - name: mouth_yap_1_right
     id: 0x06
-    logical_id: 0x11
+    logical_id: 0x14
     side: right
     source: mouth_yap_1.anim
     type: mouth
@@ -109,7 +109,7 @@ animations:
 
   - name: mouth_yap_2_left
     id: 0x07
-    logical_id: 0x12
+    logical_id: 0x15
     side: left
     source: mouth_yap_2.anim
     type: mouth
@@ -123,7 +123,7 @@ animations:
 
   - name: mouth_yap_2_right
     id: 0x08
-    logical_id: 0x12
+    logical_id: 0x15
     side: right
     source: mouth_yap_2.anim
     type: mouth
@@ -137,7 +137,7 @@ animations:
 
   - name: mouth_yap_3_left
     id: 0x09
-    logical_id: 0x13
+    logical_id: 0x16
     side: left
     source: mouth_yap_3.anim
     type: mouth
@@ -151,7 +151,7 @@ animations:
 
   - name: mouth_yap_3_right
     id: 0x0A
-    logical_id: 0x13
+    logical_id: 0x16
     side: right
     source: mouth_yap_3.anim
     type: mouth
@@ -165,7 +165,7 @@ animations:
 
   - name: eye_excited_left
     id: 0x0B
-    logical_id: 0x14
+    logical_id: 0x17
     side: left
     source: eye_happy.anim
     type: eye
@@ -179,7 +179,7 @@ animations:
 
   - name: eye_excited_right
     id: 0x0C
-    logical_id: 0x14
+    logical_id: 0x17
     side: right
     source: eye_happy.anim
     type: eye
@@ -191,23 +191,112 @@ animations:
     matrix_height: 16
     brightness: 0.2
 
+  # === New animation sets (single eye, left/right mouth) ===
+  - name: eye_flushed
+    id: 0x0D
+    source: eye_flushed.anim
+    type: eye
+    embed: true
+    rotation: 90
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: eye_stare
+    id: 0x0E
+    source: eye_stare.anim
+    type: eye
+    embed: true
+    rotation: 90
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 16
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_flushed_left
+    id: 0x0F
+    logical_id: 0x18
+    side: left
+    source: mouth_flushed.anim
+    type: mouth
+    embed: true
+    rotation: 0
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 32
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_flushed_right
+    id: 0x10
+    logical_id: 0x18
+    side: right
+    source: mouth_flushed.anim
+    type: mouth
+    embed: true
+    rotation: 180
+    mirror_x: true
+    mirror_y: false
+    matrix_width: 32
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_stare_left
+    id: 0x11
+    logical_id: 0x19
+    side: left
+    source: mouth_stare.anim
+    type: mouth
+    embed: true
+    rotation: 0
+    mirror_x: false
+    mirror_y: false
+    matrix_width: 32
+    matrix_height: 16
+    brightness: 0.2
+
+  - name: mouth_stare_right
+    id: 0x12
+    logical_id: 0x19
+    side: right
+    source: mouth_stare.anim
+    type: mouth
+    embed: true
+    rotation: 180
+    mirror_x: true
+    mirror_y: false
+    matrix_width: 32
+    matrix_height: 16
+    brightness: 0.2
+
   # === Logical animations (for protocol, not embedded) ===
   - name: mouth_idle
-    id: 0x10
-    embed: false
-
-  - name: mouth_yap_1
-    id: 0x11
-    embed: false
-
-  - name: mouth_yap_2
-    id: 0x12
-    embed: false
-
-  - name: mouth_yap_3
     id: 0x13
     embed: false
 
-  - name: eye_excited
+  - name: mouth_yap_1
     id: 0x14
+    embed: false
+
+  - name: mouth_yap_2
+    id: 0x15
+    embed: false
+
+  - name: mouth_yap_3
+    id: 0x16
+    embed: false
+
+  - name: eye_excited
+    id: 0x17
+    embed: false
+
+  - name: mouth_flushed
+    id: 0x18
+    embed: false
+
+  - name: mouth_stare
+    id: 0x19
     embed: false

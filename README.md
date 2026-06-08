@@ -1,6 +1,6 @@
 # NOS
 
-![](assets/NOS.png)
+![Image by korwynze](assets/NOS.png)
 
 **N**itrous **O**xide / **N**ibble**OS** - Firmware for Nibble the protogen.
 
@@ -421,3 +421,7 @@ The mapping table in `cmd/structs.go` is auto-generated between `// MAPPING_STAR
    - For simple animations: use next sequential embedded ID
    - For left/right variants: create both variants + a logical animation
 3. Run `task update_anims`
+
+# Assets
+## NOS Logo
+NOS Logo by [korwynze](https://korwynze.carrd.co/)

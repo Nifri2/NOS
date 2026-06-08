@@ -47,10 +47,11 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 	fmt.Printf("[%d] Watchdog configured\n", Ts())
 
 	animChan := make(chan animUpdate, 1)
+	brightnessChan := make(chan int, 4)
 
 	// Start animation routine in background
 	fmt.Printf("[%d] Starting displayAnimation goroutine...\n", Ts())
-	go displayAnimation(animChan, led, config)
+	go displayAnimation(animChan, brightnessChan, led, config)
 	fmt.Printf("[%d] displayAnimation goroutine started\n", Ts())
 
 	// Watchdog logging goroutine - proves scheduler is alive even if other goroutines freeze
@@ -185,6 +186,18 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 								fmt.Printf("[%d] [REBOOT] received, hard resetting in 500ms\n", Ts())
 								time.Sleep(500 * time.Millisecond)
 								HardReset()
+							case Cmd_DayMode:
+								select {
+								case brightnessChan <- DayModeBrightnessPercent:
+								default:
+								}
+								fmt.Printf("[%d] [MODE] day (+%d%%)\n", Ts(), DayModeBrightnessPercent-100)
+							case Cmd_NightMode:
+								select {
+								case brightnessChan <- 100:
+								default:
+								}
+								fmt.Printf("[%d] [MODE] night\n", Ts())
 
 						case Cmd_DisplayAnim:
 								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
@@ -231,7 +244,7 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 }
 
 // displayAnimation is a recoverable supervisor that restarts the animation loop on panic
-func displayAnimation(animChan chan animUpdate, led machine.Pin, config Settings) {
+func displayAnimation(animChan chan animUpdate, brightnessChan chan int, led machine.Pin, config Settings) {
 	for {
 		func() {
 			defer func() {
@@ -247,14 +260,14 @@ func displayAnimation(animChan chan animUpdate, led machine.Pin, config Settings
 					time.Sleep(time.Second)
 				}
 			}()
-			displayAnimationLoop(animChan, led, config)
+			displayAnimationLoop(animChan, brightnessChan, led, config)
 		}()
 		fmt.Printf("[%d] [ANIM] Restarting animation loop...\n", Ts())
 	}
 }
 
 // displayAnimationLoop is the actual animation rendering logic
-func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Settings) {
+func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led machine.Pin, config Settings) {
 	fmt.Printf("[%d] [ANIM] displayAnimation started, waiting 2s for board stabilization...\n", Ts())
 
 	// Wait for the board to stabilize
@@ -277,17 +290,33 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 
 	fmt.Printf("[%d] [ANIM] Found eye_idle=%v mouth_idle=%v\n", Ts(), eyeIdleAnim != nil, mouthAnim != nil)
 
-	// bytesToRawInto converts GRB bytes into dst buffer (zero allocation)
+	// Runtime brightness scale applied per-pixel on top of compiled brightness.
+	// 100 = night (default), DayModeBrightnessPercent (e.g. 110) when day mode active.
+	// Updated via brightnessChan; captured by the rendering closures below.
+	brightnessPercent := 100
+
+	// bytesToRawInto converts GRB bytes into dst buffer (zero allocation),
+	// applying brightnessPercent and clamping each channel to 255.
 	bytesToRawInto := func(dst []uint32, src []byte) {
 		n := len(src) / 3
 		if n > len(dst) {
 			n = len(dst)
 		}
+		scale := brightnessPercent
 		for i := 0; i < n; i++ {
-			g := src[i*3]
-			r := src[i*3+1]
-			b := src[i*3+2]
-			dst[i] = uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
+			gi := int(src[i*3]) * scale / 100
+			ri := int(src[i*3+1]) * scale / 100
+			bi := int(src[i*3+2]) * scale / 100
+			if gi > 255 {
+				gi = 255
+			}
+			if ri > 255 {
+				ri = 255
+			}
+			if bi > 255 {
+				bi = 255
+			}
+			dst[i] = uint32(gi)<<24 | uint32(ri)<<16 | uint32(bi)<<8
 		}
 	}
 
@@ -427,6 +456,7 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 	// Uses integer smoothstep easing (no floats, no allocations).
 	// Smoothstep: s(t) = t²(3-2t) computed in fixed-point with 256 = 1.0
 	lerpFrameInto := func(dst []uint32, from []byte, to []byte, step, totalSteps, pixelCount int) {
+		scale := brightnessPercent
 		for i := 0; i < pixelCount; i++ {
 			// Map step to [0, 256]
 			t := step * 256 / totalSteps
@@ -440,11 +470,19 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 			tr := int(to[i*3+1])
 			tb := int(to[i*3+2])
 
-			g := uint8(fg + (tg-fg)*t/256)
-			r := uint8(fr + (tr-fr)*t/256)
-			b := uint8(fb + (tb-fb)*t/256)
-
-			dst[i] = uint32(g)<<24 | uint32(r)<<16 | uint32(b)<<8
+			gi := (fg + (tg-fg)*t/256) * scale / 100
+			ri := (fr + (tr-fr)*t/256) * scale / 100
+			bi := (fb + (tb-fb)*t/256) * scale / 100
+			if gi > 255 {
+				gi = 255
+			}
+			if ri > 255 {
+				ri = 255
+			}
+			if bi > 255 {
+				bi = 255
+			}
+			dst[i] = uint32(gi)<<24 | uint32(ri)<<16 | uint32(bi)<<8
 		}
 	}
 
@@ -482,6 +520,16 @@ func displayAnimationLoop(animChan chan animUpdate, led machine.Pin, config Sett
 				if debugLog {
 					fmt.Printf("[%d] [ANIM] Queued mouth: %s\n", Ts(), update.Mouth.Name)
 				}
+			}
+		default:
+		}
+
+		// Check for brightness mode update (non-blocking)
+		select {
+		case bp := <-brightnessChan:
+			brightnessPercent = bp
+			if debugLog {
+				fmt.Printf("[%d] [ANIM] brightnessPercent=%d\n", Ts(), brightnessPercent)
 			}
 		default:
 		}
