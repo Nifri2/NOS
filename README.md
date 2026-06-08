@@ -4,6 +4,42 @@
 
 **N**itrous **O**xide / **N**ibble**OS** - Firmware for Nibble the protogen.
 
+## Table of Contents
+
+- [Architecture](#architecture)
+  - [Components](#components)
+  - [Communication Flow](#communication-flow)
+- [Radio Remote Control](#radio-remote-control)
+  - [Encoding](#encoding)
+  - [Button Mapping](#button-mapping)
+- [Protocol](#protocol)
+  - [Packet Format (6 bytes)](#packet-format-6-bytes)
+  - [Commands](#commands)
+  - [CRC-8/MAXIM](#crc-8maxim)
+  - [Protocol Hardening](#protocol-hardening)
+- [Animations](#animations)
+  - [Embedded Eye Animations](#embedded-eye-animations)
+  - [Embedded Mouth Animations](#embedded-mouth-animations)
+  - [Logical Animations (Protocol IDs)](#logical-animations-protocol-ids)
+- [Animation Transitions](#animation-transitions)
+- [WS2812 LED Driver](#ws2812-led-driver)
+- [Memory Management](#memory-management)
+  - [Monitoring](#monitoring)
+  - [Canary Goroutines](#canary-goroutines)
+- [TinyGo RP2350 Known Issues](#tinygo-rp2350-known-issues)
+- [Requirements](#requirements)
+- [Tasks](#tasks)
+  - [Firmware](#firmware)
+  - [Development](#development)
+- [Animation Pipeline](#animation-pipeline)
+  - [Configuration (`anims.yaml`)](#configuration-animsyaml)
+  - [Side Mapping (Left/Right Workers)](#side-mapping-leftright-workers)
+  - [Workflow](#workflow)
+  - [How it works](#how-it-works)
+  - [Adding new animations](#adding-new-animations)
+- [Assets](#assets)
+  - [NOS Logo](#nos-logo)
+
 ## Architecture
 
 NOS uses a distributed master-worker architecture with 5 RP2350 (Pico 2) microcontrollers communicating over a shared UART bus.
@@ -82,14 +118,14 @@ sequenceDiagram
     participant W1 as Worker 1
 
     Note over D: Radio button pressed
-    D->>B: [0xAA, 0xFF, 0x03, 0x01, 0x10, CRC8]
+    D->>B: [0xAA, 0xFF, 0x03, 0x01, 0x13, CRC8]
     Note over B: Broadcast: Display Anim<br/>Eye=Blink, Mouth=Idle
 
     B->>W0: Packet received
     B->>W1: Packet received
 
-    Note over W0: Addr 0xFF = broadcast<br/>CRC8 valid ✓<br/>Map 0x10 → 0x02 (left)
-    Note over W1: Addr 0xFF = broadcast<br/>CRC8 valid ✓<br/>Map 0x10 → 0x03 (right)
+    Note over W0: Addr 0xFF = broadcast<br/>CRC8 valid ✓<br/>Map 0x13 → 0x02 (left)
+    Note over W1: Addr 0xFF = broadcast<br/>CRC8 valid ✓<br/>Map 0x13 → 0x03 (right)
 
     W0->>W0: PIO writes to eye strip
     W0->>W0: PIO writes to mouth strip
@@ -97,7 +133,7 @@ sequenceDiagram
     W1->>W1: PIO writes to mouth strip
 
     loop Every 2 seconds
-        D->>B: [0xAA, 0xFF, 0x00, 0x00, 0x10, CRC8]
+        D->>B: [0xAA, 0xFF, 0x00, 0x00, 0x13, CRC8]
         Note over B: Broadcast keepalive
         B->>W0: Feeds watchdog
         B->>W1: Feeds watchdog
@@ -123,21 +159,21 @@ Single-press codes (0–3) are currently unassigned.
 | Code | Buttons | Action | Description |
 |------|---------|--------|-------------|
 | 0x04 | A + A | Mouth: Idle | Send idle mouth animation to all workers |
-| 0x05 | A + B | Reserved | — |
-| 0x06 | A + C | Reserved | — |
-| 0x07 | A + D | Reserved | — |
+| 0x05 | A + B | Reserved | (none) |
+| 0x06 | A + C | Reserved | (none) |
+| 0x07 | A + D | Reserved | (none) |
 | 0x08 | B + A | Eyes: Idle Blink | Periodic blink cycle (~3s interval, 200ms blink) |
 | 0x09 | B + B | Eyes: Happy | Static happy/squint expression |
 | 0x0A | B + C | Eyes: Excited | Static excited expression (per-side rotation) |
-| 0x0B | B + D | Reserved | — |
-| 0x0C | C + A | Reserved | — |
-| 0x0D | C + B | Reserved | — |
-| 0x0E | C + C | Reserved | — |
-| 0x0F | C + D | Reserved | — |
-| 0x10 | D + A | Reserved | Planned: insignia mode (code value collides with `Anim_MouthIdle` ID — different namespaces, no conflict) |
-| 0x11 | D + B | Reserved | — |
-| 0x12 | D + C | Reserved | — |
-| 0x13 | D + D | System Reboot | Broadcasts `Cmd_Reboot`, then hard-resets dispatcher |
+| 0x0B | B + D | Reserved | (none) |
+| 0x0C | C + A | Reserved | (none) |
+| 0x0D | C + B | Set: Stare | Broadcasts `Anim_EyeStare` + `Anim_MouthStare` |
+| 0x0E | C + C | Set: Flushed | Broadcasts `Anim_EyeFlushed` + `Anim_MouthFlushed` |
+| 0x0F | C + D | Reserved | (none) |
+| 0x10 | D + A | Reserved | Planned: insignia mode. Radio code namespace is separate from animation IDs, so any value overlap is cosmetic. |
+| 0x11 | D + B | Reserved | (none) |
+| 0x12 | D + C | Reserved | (none) |
+| 0x13 | D + D | Day/Night Toggle | Toggles between `Cmd_DayMode` (brightness `+DayModeBrightnessPercent`) and `Cmd_NightMode` (compiled brightness). Night is boot default. |
 
 ## Protocol
 
@@ -156,12 +192,14 @@ Single-press codes (0–3) are currently unassigned.
 
 | Value | Name | Description |
 |-------|------|-------------|
-| 0x00 | `NoOp` | Keepalive — feeds worker watchdog, no display change |
+| 0x00 | `NoOp` | Keepalive. Feeds worker watchdog, no display change |
 | 0x01 | `LedOn` | Turn status LED on |
 | 0x02 | `LedOff` | Turn status LED off |
 | 0x03 | `DisplayAnim` | Set eye and mouth animations |
 | 0x04 | `Ping` | Reserved (unused) |
 | 0x05 | `Reboot` | Hard-reset the worker |
+| 0x06 | `DayMode` | Switch worker render brightness to day (`DayModeBrightnessPercent`) |
+| 0x07 | `NightMode` | Switch worker render brightness to night (100%, compiled default) |
 
 ### CRC-8/MAXIM
 
@@ -187,6 +225,8 @@ Single-press codes (0–3) are currently unassigned.
 | 0x04 | `eye_happy` | 1 | Happy/squint expression |
 | 0x0B | `eye_excited_left` | 1 | Excited expression (Worker 0) |
 | 0x0C | `eye_excited_right` | 1 | Excited expression (Worker 1, different rotation) |
+| 0x0D | `eye_flushed` | 1 | Flushed expression (same on both workers) |
+| 0x0E | `eye_stare` | 1 | Stare expression (same on both workers) |
 
 ### Embedded Mouth Animations
 
@@ -200,6 +240,10 @@ Single-press codes (0–3) are currently unassigned.
 | 0x08 | `mouth_yap_2_right` | Right | Medium open (mirrored) |
 | 0x09 | `mouth_yap_3_left` | Left | Wide open |
 | 0x0A | `mouth_yap_3_right` | Right | Wide open (mirrored) |
+| 0x0F | `mouth_flushed_left` | Left | Flushed mouth |
+| 0x10 | `mouth_flushed_right` | Right | Flushed mouth (mirrored) |
+| 0x11 | `mouth_stare_left` | Left | Stare mouth |
+| 0x12 | `mouth_stare_right` | Right | Stare mouth (mirrored) |
 
 ### Logical Animations (Protocol IDs)
 
@@ -207,20 +251,22 @@ The dispatcher sends these IDs; each worker translates them to its side-specific
 
 | ID | Name | Worker 0 (left) | Worker 1 (right) |
 |----|------|-----------------|-----------------|
-| 0x10 | `mouth_idle` | 0x02 | 0x03 |
-| 0x11 | `mouth_yap_1` | 0x05 | 0x06 |
-| 0x12 | `mouth_yap_2` | 0x07 | 0x08 |
-| 0x13 | `mouth_yap_3` | 0x09 | 0x0A |
-| 0x14 | `eye_excited` | 0x0B | 0x0C |
+| 0x13 | `mouth_idle` | 0x02 | 0x03 |
+| 0x14 | `mouth_yap_1` | 0x05 | 0x06 |
+| 0x15 | `mouth_yap_2` | 0x07 | 0x08 |
+| 0x16 | `mouth_yap_3` | 0x09 | 0x0A |
+| 0x17 | `eye_excited` | 0x0B | 0x0C |
+| 0x18 | `mouth_flushed` | 0x0F | 0x10 |
+| 0x19 | `mouth_stare` | 0x11 | 0x12 |
 
 ## Animation Transitions
 
-Workers blend between animations using per-pixel smoothstep interpolation. No protocol changes are needed — transitions are handled entirely on the worker side.
+Workers blend between animations using per-pixel smoothstep interpolation. No protocol changes are needed; transitions are handled entirely on the worker side.
 
 - **Eye transitions**: ~250ms (15 frames at ~60fps)
 - **Mouth transitions**: ~100ms (6 frames)
 - **Multi-frame → static**: waits for the current animation cycle to complete before starting the blend (e.g., `eye_blink` plays all 50 frames before fading to `eye_idle`)
-- **Multi-frame target**: immediate hard switch — no blend delay
+- **Multi-frame target**: immediate hard switch, no blend delay
 - **Static → static**: immediate smooth blend
 - **Redirect**: if a new target arrives mid-blend, it snapshots the current interpolated frame and blends from there
 - **Zero allocation**: snapshot buffers allocated once at init (eye: 768 bytes, mouth: 1536 bytes)
@@ -280,11 +326,11 @@ If any canary stops ticking, that goroutine has stalled (likely GC or panic).
 Issues discovered during development on TinyGo with the RP2350 (Pico 2):
 
 **Dual-core scheduler deadlocks under GC pressure**
-Using `-scheduler=cores` (the default multi-core scheduler) causes the firmware to deadlock when GC runs concurrently across cores. Fix: use `-scheduler=tasks` in all build commands. This is set in `taskfile.yaml`'s `_build` and `_flash` tasks — do not remove this flag. Reference: [tinygo-org/tinygo#5151](https://github.com/tinygo-org/tinygo/issues/5151).
+Using `-scheduler=cores` (the default multi-core scheduler) causes the firmware to deadlock when GC runs concurrently across cores. Fix: use `-scheduler=tasks` in all build commands. This is set in `taskfile.yaml`'s `_build` and `_flash` tasks; do not remove this flag. Reference: [tinygo-org/tinygo#5151](https://github.com/tinygo-org/tinygo/issues/5151).
 
 **Software reset is not functional**
 On the RP2350 with current TinyGo:
-- `machine.Watchdog.Configure` / `machine.Watchdog.Update` appear to be no-ops — the watchdog does not actually reset the chip
+- `machine.Watchdog.Configure` / `machine.Watchdog.Update` appear to be no-ops; the watchdog does not actually reset the chip
 - `machine.CPUReset()` does not reset the chip
 - Writing `0x05FA0004` to the AIRCR register (`0xE000ED0C`) does not reset the chip
 
@@ -294,7 +340,7 @@ On the RP2350 with current TinyGo:
 `//go:embed` directives may place animation data in RAM rather than flash, limiting available space. Total animation data must stay well under the 520 KB SRAM limit. Large animation sets may require streaming from flash instead.
 
 **ADC peripheral disabled at boot**
-`machine.InitADC()` must be called before any `adc.Get()` — it sets `ADC_CS.EN=1`. Without it, `adc.Get()` polls `ADC_CS.READY` forever (the peripheral is disabled at boot). If the ADC is needed in future, call `machine.InitADC()` first and add a diagnostic read to confirm it's not hanging.
+`machine.InitADC()` must be called before any `adc.Get()`; it sets `ADC_CS.EN=1`. Without it, `adc.Get()` polls `ADC_CS.READY` forever (the peripheral is disabled at boot). If the ADC is needed in future, call `machine.InitADC()` first and add a diagnostic read to confirm it's not hanging.
 
 ## Requirements
 
@@ -318,11 +364,14 @@ Run tasks with `task <task-name>`. Use `task --list` to see all available tasks.
 | `build:worker-2` | Build worker-2 firmware |
 | `build:worker-3` | Build worker-3 firmware |
 | `build:all` | Build all firmwares |
+| `build:<name>:debug` | Same as the matching `build:<name>` task but with `DEBUG=true` (enables verbose logging) |
+| `build:all:debug` | Build all firmwares with debug logging |
 | `flash:dispatcher` | Flash dispatcher firmware (with monitor) |
 | `flash:worker-0` | Flash worker-0 firmware (with monitor) |
 | `flash:worker-1` | Flash worker-1 firmware (with monitor) |
 | `flash:worker-2` | Flash worker-2 firmware (with monitor) |
 | `flash:worker-3` | Flash worker-3 firmware (with monitor) |
+| `flash:<name>:debug` | Same as the matching `flash:<name>` task but with `DEBUG=true` |
 | `monitor` | Attach serial monitor to connected Pico |
 
 ### Development
@@ -333,6 +382,8 @@ Run tasks with `task <task-name>`. Use `task --list` to see all available tasks.
 | `update_anims` | Compile animations and regenerate embed code |
 | `compile_anims` | Compile `.anim` sources to `.animbyte` files |
 | `generate_embeds` | Update `main.go` and `cmd/structs.go` from `anims.yaml` |
+| `generate_commit` | Generate a commit message with Claude, then commit and push (`helpers/generate_commit.sh`) |
+| `push_submodule` | Commit and push changes in the `compiler` submodule, then check out `main` (`helpers/push_submodule.sh`) |
 
 ## Animation Pipeline
 
@@ -363,7 +414,7 @@ For animations that need per-side rotation (eyes) or mirroring (mouth), use logi
 # Physical variants (embedded, side-specific)
 - name: mouth_idle_left
   id: 0x02
-  logical_id: 0x10        # Maps from Anim_MouthIdle
+  logical_id: 0x13        # Maps from Anim_MouthIdle
   side: left              # Worker_0 uses this
   source: mouth_idle.anim
   embed: true
@@ -371,7 +422,7 @@ For animations that need per-side rotation (eyes) or mirroring (mouth), use logi
 
 - name: mouth_idle_right
   id: 0x03
-  logical_id: 0x10        # Maps from Anim_MouthIdle
+  logical_id: 0x13        # Maps from Anim_MouthIdle
   side: right             # Worker_1 uses this
   source: mouth_idle.anim
   embed: true
@@ -380,14 +431,14 @@ For animations that need per-side rotation (eyes) or mirroring (mouth), use logi
 
 # Logical animation (protocol ID only, not embedded)
 - name: mouth_idle
-  id: 0x10
+  id: 0x13
   embed: false
 ```
 
 **How it works:**
-1. Dispatcher sends logical ID `Anim_MouthIdle` (0x10) to both workers
-2. Worker_0 (left) translates 0x10 → 0x02 (`Anim_MouthIdleLeft`)
-3. Worker_1 (right) translates 0x10 → 0x03 (`Anim_MouthIdleRight`)
+1. Dispatcher sends logical ID `Anim_MouthIdle` (0x13) to both workers
+2. Worker_0 (left) translates 0x13 → 0x02 (`Anim_MouthIdleLeft`)
+3. Worker_1 (right) translates 0x13 → 0x03 (`Anim_MouthIdleRight`)
 
 The mapping table in `cmd/structs.go` is auto-generated between `// MAPPING_START` / `// MAPPING_END` markers.
 
@@ -399,20 +450,20 @@ The mapping table in `cmd/structs.go` is auto-generated between `// MAPPING_STAR
 
 ### How it works
 
-1. **`compile_anims`** — Runs `helpers/compile_all.py`:
+1. **`compile_anims`** runs `helpers/compile_all.py`:
    - Reads `anims.yaml`
    - Compiles each animation using `compiler/compiler/process.py`
    - Outputs `.animbyte` files to `animations/`
 
-2. **`generate_embeds`** — Runs `helpers/generate_embeds.py`:
+2. **`generate_embeds`** runs `helpers/generate_embeds.py`:
    - Reads `anims.yaml`
    - Updates `main.go` between marker comments:
-     - `// EMBED_START` / `// EMBED_END` — embed directives
-     - `// LOAD_START` / `// LOAD_END` — LoadAnimation calls
-     - `// APPEND_START` / `// APPEND_END` — LoadedAnimations array
+     - `// EMBED_START` / `// EMBED_END`: embed directives
+     - `// LOAD_START` / `// LOAD_END`: LoadAnimation calls
+     - `// APPEND_START` / `// APPEND_END`: LoadedAnimations array
    - Updates `cmd/structs.go` between markers:
-     - `// ANIMID_START` / `// ANIMID_END` — AnimationID constants
-     - `// MAPPING_START` / `// MAPPING_END` — Side mapping table
+     - `// ANIMID_START` / `// ANIMID_END`: AnimationID constants
+     - `// MAPPING_START` / `// MAPPING_END`: Side mapping table
 
 ### Adding new animations
 
@@ -422,6 +473,7 @@ The mapping table in `cmd/structs.go` is auto-generated between `// MAPPING_STAR
    - For left/right variants: create both variants + a logical animation
 3. Run `task update_anims`
 
-# Assets
-## NOS Logo
+## Assets
+
+### NOS Logo
 NOS Logo by [korwynze](https://korwynze.carrd.co/)
