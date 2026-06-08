@@ -23,7 +23,7 @@ func TestRadioEncoding(t *testing.T) {
 		{0, 1, 0x05, "A+B (mouth talk)"},
 		{1, 0, 0x08, "B+A (eye idle)"},
 		{1, 1, 0x09, "B+B (eye happy)"},
-		{3, 3, 0x13, "D+D (reboot)"},
+		{3, 3, 0x13, "D+D (day/night toggle)"},
 		{0, 3, 0x07, "A+D"},
 		{3, 0, 0x10, "D+A"},
 	}
@@ -43,5 +43,54 @@ func TestCrc8(t *testing.T) {
 
 	if result != expected {
 		t.Errorf("Crc8(%v) = 0x%02X, expected 0x%02X", input, result, expected)
+	}
+}
+
+func TestCrc8Bytes4_MatchesCrc8(t *testing.T) {
+	// Hot-path zero-allocation form must agree with the generic Crc8 for any 4 bytes.
+	cases := [][4]byte{
+		{0x01, 0x03, 0x00, 0x10},
+		{0xFF, 0x03, byte(Anim_EyeStare), byte(Anim_MouthStare)},
+		{0xFF, 0x08, 74, 82},
+		{0x00, 0x00, 0x00, 0x00},
+	}
+	for _, c := range cases {
+		want := Crc8(c[:])
+		got := Crc8Bytes4(c[0], c[1], c[2], c[3])
+		if got != want {
+			t.Errorf("Crc8Bytes4(%v) = 0x%02X, Crc8 = 0x%02X", c, got, want)
+		}
+	}
+}
+
+func TestParseRole(t *testing.T) {
+	cases := map[string]Role{
+		"worker":     Worker,
+		"hud":        HUD,
+		"dispatcher": Dispatcher,
+		"":           Dispatcher, // default
+		"bogus":      Dispatcher, // unknown defaults to dispatcher
+	}
+	for in, want := range cases {
+		if got := ParseRole(in); got != want {
+			t.Errorf("ParseRole(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestParseAddress(t *testing.T) {
+	cases := map[string]Address{
+		"worker-0": Worker_0,
+		"worker-1": Worker_1,
+		"worker-2": Worker_2,
+		"worker-3": Worker_3,
+		"dispatch": Dispatch,
+		"":         Dispatch,
+		"bogus":    Dispatch,
+	}
+	for in, want := range cases {
+		if got := ParseAddress(in); got != want {
+			t.Errorf("ParseAddress(%q) = %v, want %v", in, got, want)
+		}
 	}
 }

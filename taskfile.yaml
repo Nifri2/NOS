@@ -8,6 +8,9 @@ tasks:
   _build:
     internal: true
     cmds:
+      # Gate the build on the pure-Go test suite. Cheap (~ms) and catches
+      # protocol/reducer regressions before they reach a flash cycle.
+      - task: test
       - |
         mkdir -p build
         echo "Building {{.ROLE}} ({{.ADDRESS}}) debug={{.DEBUG}}"

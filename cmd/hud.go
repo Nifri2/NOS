@@ -33,27 +33,9 @@ const (
 // Display panel: two-colour SSD1306 @ I2C 0x3C. Rows 0-15 are yellow (headline),
 // rows 16-63 are blue. There is a ~2px dead gap between the regions.
 
-// hudState is everything the HUD reconstructs from the bus.
-type hudState struct {
-	eyeAnim   AnimationID
-	mouthAnim AnimationID
-	dayMode   bool
-	battDeci  uint8 // pack voltage in deci-volts (74 = 7.4V)
-	battPct   uint8 // charge percent 0-100
-	rxPackets uint32
-	crcFails  uint32
-}
-
-// displayChanged reports whether anything the HUD actually renders differs.
-// rxPackets/crcFails deliberately don't count: they tick every packet and would
-// force a redraw on every frame.
-func displayChanged(a, b *hudState) bool {
-	return a.eyeAnim != b.eyeAnim ||
-		a.mouthAnim != b.mouthAnim ||
-		a.dayMode != b.dayMode ||
-		a.battDeci != b.battDeci ||
-		a.battPct != b.battPct
-}
+// hudState, displayChanged, and hudApplyPacket live in hud_state.go (pure Go).
+// Keeping them out of this tinygo-tagged file lets unit tests cover the packet
+// reducer without a board.
 
 func RunHUD(config Settings, uart *machine.UART, led machine.Pin) {
 	// USB-CDC warmup so the boot banner has a chance to land on a monitor.
@@ -137,28 +119,9 @@ func RunHUD(config Settings, uart *machine.UART, led machine.Pin) {
 				bufIdx++
 				if bufIdx == PacketSize {
 					// buf = [AA, Addr, Cmd, Eye, Mouth, Checksum]
-					cmdByte := buf[2]
-					eyeByte := buf[3]
-					mouthByte := buf[4]
-					checksumByte := buf[5]
-					if Crc8(buf[1:5]) == checksumByte {
-						st.rxPackets++
-						// NOTE: no address filtering - the HUD acts on every valid packet.
-						switch Command(cmdByte) {
-						case Cmd_DisplayAnim:
-							st.eyeAnim = AnimationID(eyeByte)
-							st.mouthAnim = AnimationID(mouthByte)
-						case Cmd_DayMode:
-							st.dayMode = true
-						case Cmd_NightMode:
-							st.dayMode = false
-						case Cmd_Battery:
-							st.battDeci = eyeByte
-							st.battPct = mouthByte
-						}
-					} else {
-						st.crcFails++
-					}
+					// hudApplyPacket validates CRC and updates st. No address
+					// filtering: the HUD acts on every valid packet.
+					hudApplyPacket(&st, buf[1], buf[2], buf[3], buf[4], buf[5])
 					bufIdx = 0
 				}
 			}

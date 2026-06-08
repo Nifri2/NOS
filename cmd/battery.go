@@ -4,20 +4,11 @@ package cmd
 
 import "machine"
 
-// Battery sensing lives on whichever board owns the battery rail (the
-// dispatcher). Pack voltage is read through a resistor divider into GP26 (ADC0):
+// Hardware-facing battery sensing. Pure math (constants, conversion functions)
+// lives in battery_math.go so it can be unit-tested without an ADC.
 //
-//	R1 = 10k (battery side)   R2 = 4.7k (ground side)
-//	V_node = V_pack * R2 / (R1 + R2)  ->  V_pack = V_node * (R1 + R2) / R2
-//
-// A full 2S pack (8.4V) sits at ~2.69V on the ADC node, safely under the 3.3V ref.
-const (
-	batteryDivider  = 3.12766 // (10k + 4.7k) / 4.7k
-	batteryRefVolts = 3.3
-	batteryFullV    = 8.4
-	batteryEmptyV   = 6.6
-	batterySamples  = 10
-)
+// Pack voltage is read through a resistor divider into GP26 (ADC0); see
+// battery_math.go for the divider math.
 
 var batteryADC machine.ADC
 
@@ -37,16 +28,6 @@ func ReadBattery() (float32, int) {
 		sum += uint32(batteryADC.Get())
 	}
 	avg := float32(sum) / float32(batterySamples)
-
-	// ADC.Get() returns a 16-bit value (0..65535) regardless of native ADC width.
-	nodeV := avg / 65535.0 * batteryRefVolts
-	packV := nodeV * batteryDivider
-	pct := int((packV - batteryEmptyV) / (batteryFullV - batteryEmptyV) * 100)
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
-	return packV, pct
+	packV := adcAvgToPackVolts(avg)
+	return packV, packVoltsToPercent(packV)
 }
