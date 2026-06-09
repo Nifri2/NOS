@@ -104,7 +104,7 @@ flowchart TB
 | Dispatcher | Master controller, handles radio input, sends animation commands | `0x00` |
 | Worker 0 | Left eye (GP18) + left mouth (GP12) | `0x01` |
 | Worker 1 | Right eye (GP18) + right mouth (GP12) | `0x02` |
-| Worker 2 | Insignia display | `0x03` |
+| Worker 2 | HUD board: SSD1306 OLED on I2C0 (SDA=GP4, SCL=GP5) + dual insignia panels on GP18/GP12 | `0x03` |
 | Worker 3 | Reserved for future use | `0x04` |
 | Broadcast | All workers respond | `0xFF` |
 
