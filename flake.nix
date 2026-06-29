@@ -66,6 +66,7 @@
             pkgs.golangci-lint
             pkgs.gotools
             pkgs.go-tools
+            pkgs.gotestsum  # prettier `task test:pretty` output
             pkgs.musl
             pkgs.tinygo
             pkgs.picotool

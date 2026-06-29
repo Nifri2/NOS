@@ -14,15 +14,16 @@ func approxEqual(a, b, tol float32) bool {
 }
 
 func TestAdcAvgToPackVolts(t *testing.T) {
-	// Hand-derived expectations: V_node = avg/65535 * 3.3, V_pack = V_node * 3.12766.
+	// Hand-derived expectations: V_node = avg/65535 * 3.3, V_pack = V_node *
+	// 3.12766 * batteryCalibration (the empirical gain trim).
 	cases := []struct {
 		avg  float32
 		want float32 // pack volts
 	}{
 		{0, 0},
-		{65535, batteryRefVolts * batteryDivider},          // full ADC range -> ~10.32V (impossible in practice; tests the math)
-		{53400, 2.689 * batteryDivider},                    // ~full 2S pack (8.4V on node math)
-		{batteryEmptyV / batteryDivider / batteryRefVolts * 65535, batteryEmptyV}, // empty pack reading
+		{65535, batteryRefVolts * batteryDivider * batteryCalibration},                              // full ADC range (impossible in practice; tests the math)
+		{53400, 2.689 * batteryDivider * batteryCalibration},                                        // ~full 2S pack (8.4V on node math)
+		{batteryEmptyV / batteryCalibration / batteryDivider / batteryRefVolts * 65535, batteryEmptyV}, // empty pack reading
 	}
 	for _, c := range cases {
 		got := adcAvgToPackVolts(c.avg)

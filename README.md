@@ -15,7 +15,7 @@
 - [Protocol](#protocol)
   - [Packet Format (6 bytes)](#packet-format-6-bytes)
   - [Commands](#commands)
-  - [CRC-8/MAXIM](#crc-8maxim)
+  - [CRC-8 Checksum](#crc-8-checksum)
   - [Protocol Hardening](#protocol-hardening)
 - [Animations](#animations)
   - [Embedded Eye Animations](#embedded-eye-animations)
@@ -23,6 +23,8 @@
   - [Logical Animations (Protocol IDs)](#logical-animations-protocol-ids)
 - [Animation Transitions](#animation-transitions)
 - [WS2812 LED Driver](#ws2812-led-driver)
+- [Battery Monitoring](#battery-monitoring)
+- [HUD Board (Worker 2)](#hud-board-worker-2)
 - [Memory Management](#memory-management)
   - [Monitoring](#monitoring)
   - [Canary Goroutines](#canary-goroutines)
@@ -72,9 +74,11 @@ flowchart TB
         Mouth1[Mouth Panel\n32x16 LEDs]
     end
 
-    subgraph Worker2["Worker 2 - Insignia"]
-        RX2[UART RX]
-        PIO2[PIO0 - Display]
+    subgraph Worker2["Worker 2 - HUD Board (Bus Sniffer)"]
+        RX2[UART RX - sniffs all packets]
+        OLED2[SSD1306 OLED\n128x64 on I2C0]
+        Insignia2_0[Insignia Panel\nWS2812 GP18]
+        Insignia2_1[Insignia Panel\nWS2812 GP12]
     end
 
     subgraph Worker3["Worker 3 - Reserved"]
@@ -94,7 +98,8 @@ flowchart TB
     PIO1_0 --> Eye1
     PIO1_1 --> Mouth1
 
-    RX2 --> PIO2
+    RX2 --> OLED2
+    RX2 --> Insignia2_0 & Insignia2_1
 ```
 
 ### Components
@@ -186,7 +191,7 @@ Single-press codes (0–3) are currently unassigned.
 | 2 | Command | See table below |
 | 3 | Eye Anim | Animation ID for eye panel |
 | 4 | Mouth Anim | Animation ID for mouth panel |
-| 5 | Checksum | CRC-8/MAXIM of bytes 1–4 |
+| 5 | Checksum | CRC-8 (poly 0x31) of bytes 1–4 |
 
 ### Commands
 
@@ -200,13 +205,19 @@ Single-press codes (0–3) are currently unassigned.
 | 0x05 | `Reboot` | Hard-reset the worker |
 | 0x06 | `DayMode` | Switch worker render brightness to day (`DayModeBrightnessPercent`) |
 | 0x07 | `NightMode` | Switch worker render brightness to night (100%, compiled default) |
+| 0x08 | `Cmd_Battery` | Battery telemetry broadcast. Eye byte = pack voltage in deci-volts (7.4V→74), mouth byte = charge percent (0–100). Sent by dispatcher, consumed by HUD |
 
-### CRC-8/MAXIM
+### CRC-8 Checksum
 
 - Polynomial: `0x31`
 - Initial value: `0x00`
 - No reflection, no XOR out
 - Example: `CRC8([0x01, 0x03, 0x00, 0x10]) = 0x12`
+
+> **Note:** despite earlier docs, this is **not** CRC-8/MAXIM (which is a reflected
+> variant). It is the plain MSB-first CRC-8 over poly `0x31`. Both the dispatcher and
+> the workers use the same implementation, so the bus is internally consistent — but
+> an external CRC-8/MAXIM library will compute different checksums.
 
 ### Protocol Hardening
 
@@ -286,6 +297,32 @@ Each worker uses two PIO state machines from PIO0:
 - **SM0**: Eye strip (256 LEDs on GP18)
 - **SM1**: Mouth strip (512 LEDs on GP12)
 
+## Battery Monitoring
+
+The dispatcher owns the battery rail. It reads pack voltage through a resistor divider into `GP26` (`ADC0`), maps it to a charge percent, and broadcasts the result on the bus so the HUD board can display it.
+
+- **Resistor divider**: Pack+ → R1 → node → R2 → GND, with the node tied to the ADC pin. With R1 = 10k and R2 = 4.7k, the divider ratio is `(10k + 4.7k) / 4.7k ≈ 3.12766`, so `V_pack = V_node × 3.12766`. A full 2S pack (8.4V) sits at ~2.69V on the node, safely under the 3.3V reference.
+- **Sampling**: `ReadBattery()` averages 10 ADC samples (16-bit, 0–65535), converts the average to node volts against the 3.3V reference, then scales by the divider to recover pack voltage.
+- **Percent mapping**: voltage maps linearly to 0–100% between `6.6V` (empty) and `8.4V` (full, 2S pack), rounded to the nearest integer and clamped to the edges.
+- **Broadcast**: every 5 seconds the dispatcher broadcasts `Cmd_Battery` (`0x08`) to `0xFF`, reusing the eye/mouth payload slots — eye byte = pack voltage in deci-volts (7.4V → 74), mouth byte = charge percent (0–100).
+
+The pure conversion math (constants, voltage→percent) lives in `cmd/battery_math.go` and is unit-tested without hardware. The ADC bring-up and sampling live in `cmd/battery.go` (TinyGo-tagged). `InitBattery()` calls `machine.InitADC()` before the first `adc.Get()` — see [TinyGo RP2350 Known Issues](#tinygo-rp2350-known-issues) for why this is required.
+
+## HUD Board (Worker 2)
+
+The HUD board runs on the Worker_2 board, replacing the planned Worker_2 insignia firmware. It is a **passive bus sniffer**: because the UART bus is shared, it sees every packet the dispatcher broadcasts. Unlike a worker it does **not** filter by address — it acts on every valid (CRC-passing) packet and drives no animated LED strips. It reconstructs global state (eye animation, mouth animation, day/night mode, battery) purely from observed bus traffic.
+
+- **Display**: a 128x64 two-colour `SSD1306` OLED on `I2C0` (address `0x3C`, SDA=`GP4`, SCL=`GP5`, 400 kHz). The yellow headline region (rows 0–15) shows `NOS <MODE>`; the blue region (rows 16–63) shows status lines:
+  - `Eye:` current eye animation
+  - `Mth:` current mouth animation
+  - `Set:` inferred expression set (Stare/Flushed/Happy/Excited/None)
+  - `Bat:` pack voltage and charge percent
+- **Redraw**: throttled to ~4Hz (250ms minimum) and only when something the HUD renders actually changes; the framebuffer push happens while the bus is idle so it never starves the RX path.
+- **Insignia panels**: the board still drives two static WS2812 insignia panels, written once at boot from the `insignia` animation's first frame (GP18 and GP12, both panels share the same frame). There is no animation loop or response to bus traffic.
+- **Watchdog**: a 5s watchdog matching the workers, fed by the 1Hz LED heartbeat.
+
+The state reducer (`hudApplyPacket` / `displayChanged` in `cmd/hud_state.go`) is pure Go and unit-tested; the hardware-facing rendering and sniff loop live in `cmd/hud.go` (TinyGo-tagged).
+
 ## Memory Management
 
 The RP2350 has only 520 KB of RAM. To avoid GC-induced freezes, the animation loop uses a **zero-allocation hot path**:
@@ -340,7 +377,7 @@ On the RP2350 with current TinyGo:
 `//go:embed` directives may place animation data in RAM rather than flash, limiting available space. Total animation data must stay well under the 520 KB SRAM limit. Large animation sets may require streaming from flash instead.
 
 **ADC peripheral disabled at boot**
-`machine.InitADC()` must be called before any `adc.Get()`; it sets `ADC_CS.EN=1`. Without it, `adc.Get()` polls `ADC_CS.READY` forever (the peripheral is disabled at boot). If the ADC is needed in future, call `machine.InitADC()` first and add a diagnostic read to confirm it's not hanging.
+`machine.InitADC()` must be called before any `adc.Get()`; it sets `ADC_CS.EN=1`. Without it, `adc.Get()` polls `ADC_CS.READY` forever (the peripheral is disabled at boot). The ADC is now actively used for [battery sensing](#battery-monitoring): `InitBattery()` in `cmd/battery.go` calls `machine.InitADC()` before the first `adc.Get()`, exactly to avoid this boot-disabled hang.
 
 ## Requirements
 
@@ -363,15 +400,17 @@ Run tasks with `task <task-name>`. Use `task --list` to see all available tasks.
 | `build:worker-1` | Build worker-1 firmware |
 | `build:worker-2` | Build worker-2 firmware |
 | `build:worker-3` | Build worker-3 firmware |
+| `build:hud` | Build OLED HUD firmware (runs on the Worker_2 board as a passive bus sniffer) |
 | `build:all` | Build all firmwares |
-| `build:<name>:debug` | Same as the matching `build:<name>` task but with `DEBUG=true` (enables verbose logging) |
+| `build:<name>:debug` | Same as the matching `build:<name>` task but with `DEBUG=true` (enables verbose logging). `build:hud:debug` exists too |
 | `build:all:debug` | Build all firmwares with debug logging |
 | `flash:dispatcher` | Flash dispatcher firmware (with monitor) |
 | `flash:worker-0` | Flash worker-0 firmware (with monitor) |
 | `flash:worker-1` | Flash worker-1 firmware (with monitor) |
 | `flash:worker-2` | Flash worker-2 firmware (with monitor) |
 | `flash:worker-3` | Flash worker-3 firmware (with monitor) |
-| `flash:<name>:debug` | Same as the matching `flash:<name>` task but with `DEBUG=true` |
+| `flash:hud` | Flash OLED HUD firmware (Worker_2 board, with monitor) |
+| `flash:<name>:debug` | Same as the matching `flash:<name>` task but with `DEBUG=true`. `flash:hud:debug` exists too |
 | `monitor` | Attach serial monitor to connected Pico |
 
 ### Development

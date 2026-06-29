@@ -121,17 +121,12 @@ func RunDispatcher(config Settings, uart *machine.UART, led machine.Pin) {
 	// Day/night brightness mode — night is the boot default
 	var isDayMode bool = false
 
-	// Helper to send UART packet via channel (zero allocation in hot path)
+	// Helper to send UART packet via channel (zero allocation in hot path).
+	// BuildPacket (protocol.go) owns the wire format so the dispatcher's encoding
+	// is the same code the host loopback tests exercise.
 	sendPacket := func(addr Address, cmd Command, eye, mouth AnimationID) {
-		header := byte(0xAA)
-		a := byte(addr)
-		c := byte(cmd)
-		e := byte(eye)
-		m := byte(mouth)
-		checksum := Crc8Bytes4(a, c, e, m)
-
 		select {
-		case uartChan <- [6]byte{header, a, c, e, m, checksum}:
+		case uartChan <- BuildPacket(addr, cmd, eye, mouth):
 			txQueued++
 		default:
 			txDropped++
@@ -364,15 +359,12 @@ func runRadioLogicLoop(out chan byte) {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		var result byte
 		if p2 != -1 {
 			for getPressedPin() != -1 {
 				time.Sleep(10 * time.Millisecond)
 			}
-			result = byte(4 + ((p1 << 2) | p2))
-		} else {
-			result = byte(p1)
 		}
+		result := EncodeRadioPress(p1, p2)
 
 		// Non-blocking send if possible
 		select {

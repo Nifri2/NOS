@@ -13,13 +13,20 @@ const (
 	batteryFullV    = 8.4
 	batteryEmptyV   = 6.6
 	batterySamples  = 10
+
+	// batteryCalibration trims the systematic gain error between the ideal
+	// divider math and the real hardware: resistor tolerance plus the RP2350
+	// ADC reference not being exactly 3.3V. Single-point bench trim — a 7.40V
+	// supply read 6.50V, so true = measured * 7.40/6.50. Re-measure and adjust
+	// if you swap the divider resistors or move to a different board.
+	batteryCalibration = 1.1385 // 7.40 / 6.50
 )
 
 // adcAvgToPackVolts converts an averaged ADC reading (0..65535, machine.ADC
 // returns 16-bit regardless of native width) to pack voltage at the battery.
 func adcAvgToPackVolts(avg float32) float32 {
 	nodeV := avg / 65535.0 * batteryRefVolts
-	return nodeV * batteryDivider
+	return nodeV * batteryDivider * batteryCalibration
 }
 
 // packVoltsToPercent maps a pack voltage to a 0..100 charge percent using a

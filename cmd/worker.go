@@ -72,15 +72,11 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 		}
 	}()
 
-	const (
-		HeaderByte = 0xAA
-		PacketSize = 6
-	)
-
-	// Buffer to hold incoming packet
-	// [Header, Addr, Cmd, Eye, Mouth, Checksum]
-	buf := make([]byte, PacketSize)
-	bufIdx := 0
+	// Packet framing/decoding lives in protocol.go (pure Go) so the host loopback
+	// tests exercise the exact code the worker runs. The parser handles header
+	// sync, CRC, and address filtering; the inter-byte timeout stays here because
+	// it depends on wall clock.
+	parser := NewPacketParser(config.Address)
 	lastByteTime := time.Now()
 
 	// Diagnostic counters
@@ -114,22 +110,22 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 
 		// Heartbeat log every 10 seconds
 		if time.Since(lastHeartbeat) >= 10*time.Second {
-			fmt.Printf("[%d] [HB] rxBytes=%d rxPackets=%d bufIdx=%d\n", Ts(), rxBytes, rxPackets, bufIdx)
+			fmt.Printf("[%d] [HB] rxBytes=%d rxPackets=%d bufIdx=%d\n", Ts(), rxBytes, rxPackets, parser.Pending())
 			lastHeartbeat = now
 		}
 
-		// Inter-byte timeout: reset buffer if >20ms since last byte
-		if bufIdx > 0 && time.Since(lastByteTime) > 20*time.Millisecond {
-			// Dump partial buffer for debugging
-			fmt.Printf("[%d] [TIMEOUT] bufIdx=%d partial=[", Ts(), bufIdx)
-			for i := 0; i < bufIdx; i++ {
-				fmt.Printf("%02X", buf[i])
-				if i < bufIdx-1 {
+		// Inter-byte timeout: drop a partial frame if >20ms since the last byte.
+		if parser.Pending() > 0 && time.Since(lastByteTime) > 20*time.Millisecond {
+			partial := parser.Partial()
+			fmt.Printf("[%d] [TIMEOUT] bufIdx=%d partial=[", Ts(), len(partial))
+			for i := 0; i < len(partial); i++ {
+				fmt.Printf("%02X", partial[i])
+				if i < len(partial)-1 {
 					print(" ")
 				}
 			}
 			fmt.Printf("]\n")
-			bufIdx = 0
+			parser.Reset()
 		}
 
 		if uart.Buffered() > 0 {
@@ -137,103 +133,82 @@ func RunWorker(config Settings, uart *machine.UART, led machine.Pin) {
 			rxBytes++
 			lastByteTime = now
 
-			// State machine-ish logic
-			if bufIdx == 0 {
-				// Waiting for Header
-				if b == HeaderByte {
-					buf[0] = b
-					bufIdx++
-				}
-			} else {
-				// Filling buffer
-				buf[bufIdx] = b
-				bufIdx++
+			pkt, status := parser.Feed(b)
+			switch status {
+			case ParseIncomplete:
+				// keep buffering
 
-				if bufIdx == PacketSize {
-					// Packet complete, verify CRC-8/MAXIM checksum
-					// buf = [AA, Addr, Cmd, Eye, Mouth, Checksum]
-					addrByte := buf[1]
-					cmdByte := buf[2]
-					eyeByte := buf[3]
-					mouthByte := buf[4]
-					checksumByte := buf[5]
-
-					calculatedChecksum := Crc8(buf[1:5])
-
-					if calculatedChecksum == checksumByte {
-						// Valid packet
-						rxPackets++
-						if debugLog {
-							fmt.Printf("[%d] [PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
-								Ts(), rxPackets, addrByte, cmdByte, eyeByte, mouthByte)
-						}
-
-						// Accept if addressed to us or broadcast
-						if Address(addrByte) == config.Address || Address(addrByte) == Address_All {
-							cmd := Command(cmdByte)
-							switch cmd {
-							case Cmd_LedOn:
-								led.High()
-								ledState = true
-							case Cmd_LedOff:
-								led.Low()
-								ledState = false
-							case Cmd_NoOp:
-								machine.Watchdog.Update()
-							case Cmd_Ping:
-								fmt.Printf("[%d] [PING from dispatcher]\n", Ts())
-							case Cmd_Reboot:
-								fmt.Printf("[%d] [REBOOT] received, hard resetting in 500ms\n", Ts())
-								time.Sleep(500 * time.Millisecond)
-								HardReset()
-							case Cmd_DayMode:
-								select {
-								case brightnessChan <- DayModeBrightnessPercent:
-								default:
-								}
-								fmt.Printf("[%d] [MODE] day (+%d%%)\n", Ts(), DayModeBrightnessPercent-100)
-							case Cmd_NightMode:
-								select {
-								case brightnessChan <- 100:
-								default:
-								}
-								fmt.Printf("[%d] [MODE] night\n", Ts())
-
-						case Cmd_DisplayAnim:
-								eyeIdx := MapAnimation(config.Address, AnimationID(eyeByte))
-								mouthIdx := MapAnimation(config.Address, AnimationID(mouthByte))
-								var update animUpdate
-
-								if eyeIdx >= 0 && eyeIdx < len(LoadedAnimations) {
-									update.Eye = LoadedAnimations[eyeIdx]
-								}
-								if mouthIdx >= 0 && mouthIdx < len(LoadedAnimations) {
-									update.Mouth = LoadedAnimations[mouthIdx]
-								}
-								if update.Eye != nil || update.Mouth != nil {
-									// Non-blocking send - don't stall UART if animation is slow
-									select {
-									case animChan <- update:
-									default:
-										fmt.Printf("[%d] [WARN] animChan full, dropping update\n", Ts())
-									}
-								}
-							}
-						}
-					} else {
-						// CRC fail - dump full packet for debugging
-						fmt.Printf("[%d] [CRC FAIL] calc=%02X recv=%02X pkt=[", Ts(), calculatedChecksum, checksumByte)
-						for i := 0; i < PacketSize; i++ {
-							fmt.Printf("%02X", buf[i])
-							if i < PacketSize-1 {
-								print(" ")
-							}
-						}
-						fmt.Printf("]\n")
+			case ParseBadCRC:
+				// Dump full packet for debugging.
+				frame := parser.LastFrame()
+				calc := Crc8Bytes4(frame[1], frame[2], frame[3], frame[4])
+				fmt.Printf("[%d] [CRC FAIL] calc=%02X recv=%02X pkt=[", Ts(), calc, frame[5])
+				for i := 0; i < PacketSize; i++ {
+					fmt.Printf("%02X", frame[i])
+					if i < PacketSize-1 {
+						print(" ")
 					}
+				}
+				fmt.Printf("]\n")
 
-					// Reset buffer
-					bufIdx = 0
+			case ParseAccepted, ParseNotForUs:
+				// rxPackets counts every CRC-valid frame, even those addressed
+				// elsewhere (matches the original diagnostic semantics).
+				rxPackets++
+				if debugLog {
+					fmt.Printf("[%d] [PKT] #%d Addr=%02X Cmd=%02X Eye=%02X Mouth=%02X\n",
+						Ts(), rxPackets, pkt.Addr, byte(pkt.Cmd), byte(pkt.Eye), byte(pkt.Mouth))
+				}
+
+				if status == ParseAccepted {
+					switch pkt.Cmd {
+					case Cmd_LedOn:
+						led.High()
+						ledState = true
+					case Cmd_LedOff:
+						led.Low()
+						ledState = false
+					case Cmd_NoOp:
+						machine.Watchdog.Update()
+					case Cmd_Ping:
+						fmt.Printf("[%d] [PING from dispatcher]\n", Ts())
+					case Cmd_Reboot:
+						fmt.Printf("[%d] [REBOOT] received, hard resetting in 500ms\n", Ts())
+						time.Sleep(500 * time.Millisecond)
+						HardReset()
+					case Cmd_DayMode:
+						select {
+						case brightnessChan <- DayModeBrightnessPercent:
+						default:
+						}
+						fmt.Printf("[%d] [MODE] day (+%d%%)\n", Ts(), DayModeBrightnessPercent-100)
+					case Cmd_NightMode:
+						select {
+						case brightnessChan <- 100:
+						default:
+						}
+						fmt.Printf("[%d] [MODE] night\n", Ts())
+
+					case Cmd_DisplayAnim:
+						eyeIdx := MapAnimation(config.Address, pkt.Eye)
+						mouthIdx := MapAnimation(config.Address, pkt.Mouth)
+						var update animUpdate
+
+						if eyeIdx >= 0 && eyeIdx < len(LoadedAnimations) {
+							update.Eye = LoadedAnimations[eyeIdx]
+						}
+						if mouthIdx >= 0 && mouthIdx < len(LoadedAnimations) {
+							update.Mouth = LoadedAnimations[mouthIdx]
+						}
+						if update.Eye != nil || update.Mouth != nil {
+							// Non-blocking send - don't stall UART if animation is slow
+							select {
+							case animChan <- update:
+							default:
+								fmt.Printf("[%d] [WARN] animChan full, dropping update\n", Ts())
+							}
+						}
+					}
 				}
 			}
 		} else {
@@ -295,30 +270,9 @@ func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led
 	// Updated via brightnessChan; captured by the rendering closures below.
 	brightnessPercent := 100
 
-	// bytesToRawInto converts GRB bytes into dst buffer (zero allocation),
-	// applying brightnessPercent and clamping each channel to 255.
-	bytesToRawInto := func(dst []uint32, src []byte) {
-		n := len(src) / 3
-		if n > len(dst) {
-			n = len(dst)
-		}
-		scale := brightnessPercent
-		for i := 0; i < n; i++ {
-			gi := int(src[i*3]) * scale / 100
-			ri := int(src[i*3+1]) * scale / 100
-			bi := int(src[i*3+2]) * scale / 100
-			if gi > 255 {
-				gi = 255
-			}
-			if ri > 255 {
-				ri = 255
-			}
-			if bi > 255 {
-				bi = 255
-			}
-			dst[i] = uint32(gi)<<24 | uint32(ri)<<16 | uint32(bi)<<8
-		}
-	}
+	// bytesToRawInto / lerpFrameInto (the per-pixel frame math) live in blend.go
+	// as pure-Go package functions so they can be host-unit-tested; they take
+	// brightnessPercent explicitly instead of capturing it.
 
 	// PIO-based WS2812 - immune to UART interrupts
 	var strip1 *piolib.WS2812B
@@ -450,41 +404,6 @@ func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led
 	var mouthTransitioning bool
 	var mouthTransitionStep int
 	var mouthTransitionTarget *Animation
-
-	// lerpFrameInto blends two GRB byte frames into a uint32 render buffer.
-	// step ranges from 0 to totalSteps inclusive (step=0 → pure from, step=totalSteps → pure to).
-	// Uses integer smoothstep easing (no floats, no allocations).
-	// Smoothstep: s(t) = t²(3-2t) computed in fixed-point with 256 = 1.0
-	lerpFrameInto := func(dst []uint32, from []byte, to []byte, step, totalSteps, pixelCount int) {
-		scale := brightnessPercent
-		for i := 0; i < pixelCount; i++ {
-			// Map step to [0, 256]
-			t := step * 256 / totalSteps
-			// Smoothstep in fixed-point: t²(768-2t)/65536 stays in [0, 256]
-			t = t * t * (768 - 2*t) / 65536
-
-			fg := int(from[i*3])
-			fr := int(from[i*3+1])
-			fb := int(from[i*3+2])
-			tg := int(to[i*3])
-			tr := int(to[i*3+1])
-			tb := int(to[i*3+2])
-
-			gi := (fg + (tg-fg)*t/256) * scale / 100
-			ri := (fr + (tr-fr)*t/256) * scale / 100
-			bi := (fb + (tb-fb)*t/256) * scale / 100
-			if gi > 255 {
-				gi = 255
-			}
-			if ri > 255 {
-				ri = 255
-			}
-			if bi > 255 {
-				bi = 255
-			}
-			dst[i] = uint32(gi)<<24 | uint32(ri)<<16 | uint32(bi)<<8
-		}
-	}
 
 	fmt.Printf("[%d] [ANIM] Entering animation loop...\n", Ts())
 
@@ -674,7 +593,7 @@ func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led
 					if len(eyeTransitionFrom)/3 == EyeFrameWidth*EyeFrameHeight &&
 						len(toFrame)/3 == EyeFrameWidth*EyeFrameHeight {
 						lerpFrameInto(eyeBuffer, eyeTransitionFrom, toFrame,
-							eyeTransitionStep, eyeTransitionFrames, EyeFrameWidth*EyeFrameHeight)
+							eyeTransitionStep, eyeTransitionFrames, EyeFrameWidth*EyeFrameHeight, brightnessPercent)
 						strip1.WriteRaw(eyeBuffer)
 					}
 				}
@@ -694,7 +613,7 @@ func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led
 				frameIdx := eyeFrameCounter % int64(len(currentEyeAnim.Frames))
 				frameBytes := currentEyeAnim.Frames[frameIdx]
 				if len(frameBytes)/3 == EyeFrameWidth*EyeFrameHeight {
-					bytesToRawInto(eyeBuffer, frameBytes)
+					bytesToRawInto(eyeBuffer, frameBytes, brightnessPercent)
 					strip1.WriteRaw(eyeBuffer)
 				} else {
 					fmt.Printf("[%d] [ANIM SKIP eye] pixels=%d expected=%d name=%s frame=%d\n",
@@ -712,7 +631,7 @@ func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led
 					if len(mouthTransitionFrom)/3 == MouthFrameWidth*MouthFrameHeight &&
 						len(toFrame)/3 == MouthFrameWidth*MouthFrameHeight {
 						lerpFrameInto(mouthBuffer, mouthTransitionFrom, toFrame,
-							mouthTransitionStep, mouthTransitionFrames, MouthFrameWidth*MouthFrameHeight)
+							mouthTransitionStep, mouthTransitionFrames, MouthFrameWidth*MouthFrameHeight, brightnessPercent)
 						strip2.WriteRaw(mouthBuffer)
 					}
 				}
@@ -732,7 +651,7 @@ func displayAnimationLoop(animChan chan animUpdate, brightnessChan chan int, led
 				frameIdx := mouthFrameCounter % int64(len(currentMouthAnim.Frames))
 				frameBytes := currentMouthAnim.Frames[frameIdx]
 				if len(frameBytes)/3 == MouthFrameWidth*MouthFrameHeight {
-					bytesToRawInto(mouthBuffer, frameBytes)
+					bytesToRawInto(mouthBuffer, frameBytes, brightnessPercent)
 					strip2.WriteRaw(mouthBuffer)
 				} else {
 					fmt.Printf("[%d] [ANIM SKIP mouth] pixels=%d expected=%d name=%s frame=%d\n",

@@ -118,7 +118,7 @@ func MapAnimation(addr Address, id AnimationID) int {
 
 // Complete Protocol Packet:
 // [Header(0xAA), Address, Command, AnimID_Eye, AnimID_Mouth, Checksum]
-// Checksum = CRC-8/MAXIM of [Address, Command, AnimID_Eye, AnimID_Mouth]
+// Checksum = CRC-8 (poly 0x31) of [Address, Command, AnimID_Eye, AnimID_Mouth]
 // Commands: NoOp=0x00 LedOn=0x01 LedOff=0x02 DisplayAnim=0x03 Ping=0x04 Reboot=0x05 DayMode=0x06 NightMode=0x07 Battery=0x08
 //
 // Cmd_Battery payload reuses the eye/mouth slots: eye byte = pack voltage in

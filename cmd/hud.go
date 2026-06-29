@@ -47,17 +47,36 @@ func RunHUD(config Settings, uart *machine.UART, led machine.Pin) {
 
 	// I2C0 on GP4 (SDA) / GP5 (SCL): clear of GP0/GP1 (UART).
 	machine.I2C0.Configure(machine.I2CConfig{
-		Frequency: 400000, // 400 kHz
+		Frequency: 100000, // 100 kHz — tolerant of weak pull-ups / hand-wired runs
 		SDA:       machine.GP4,
 		SCL:       machine.GP5,
 	})
+
+	// Bus scan: probe every 7-bit address and log which ones ACK. A healthy
+	// SSD1306 answers at 0x3C (or 0x3D); silence means dead panel or bad wiring.
+	// Diagnostic only — remove once the display is confirmed working.
+	for a := uint8(0x08); a < 0x78; a++ {
+		if err := machine.I2C0.Tx(uint16(a), []byte{0x00}, nil); err == nil {
+			fmt.Printf("[%d] [HUD] I2C device ACK at 0x%02X\n", Ts(), a)
+		}
+	}
+	fmt.Printf("[%d] [HUD] I2C scan complete\n", Ts())
+
+	// Init via the stock driver (short command writes only — these work). The
+	// stock driver's framebuffer flush does NOT work on rp2350 (single 1KB Tx
+	// blows the I2C driver's 4ms deadline and wedges the peripheral), so all
+	// pixel pushes go through chunkedOLED instead. See oled.go.
 	display := ssd1306.NewI2C(machine.I2C0)
 	display.Configure(ssd1306.Config{
 		Address: 0x3C,
 		Width:   128,
 		Height:  64,
 	})
-	display.ClearDisplay()
+	oled := newChunkedOLED(machine.I2C0, 0x3C)
+	oled.ClearBuffer()
+	if err := oled.Display(); err != nil {
+		fmt.Printf("[%d] [HUD] initial clear flush err=%v\n", Ts(), err)
+	}
 	fmt.Printf("[%d] [HUD] SSD1306 configured on I2C0 GP4/GP5 @0x3C\n", Ts())
 
 	// Insignia: one static frame written to the WS2812 strip on Insignia_Pin.
@@ -84,6 +103,8 @@ func RunHUD(config Settings, uart *machine.UART, led machine.Pin) {
 
 	lastLedToggle := time.Now()
 	ledState := false
+
+	drawCount := 0 // diagnostic: count draws + log first few flush results
 
 	fmt.Printf("[%d] [HUD] entering sniff loop\n", Ts())
 	for {
@@ -129,7 +150,11 @@ func RunHUD(config Settings, uart *machine.UART, led machine.Pin) {
 			// Bus is idle: a safe moment to push the (slow) display without
 			// starving the RX path. Only redraw on a real change, throttled.
 			if (firstDraw || displayChanged(&st, &lastRendered)) && Ts()-lastDrawMs >= minRedrawMs {
-				drawHUD(display, on, &st)
+				derr := drawHUD(oled, on, &st)
+				drawCount++
+				if drawCount <= 8 {
+					fmt.Printf("[%d] [HUD] draw #%d err=%v\n", Ts(), drawCount, derr)
+				}
 				lastRendered = st
 				lastDrawMs = Ts()
 				firstDraw = false
@@ -141,7 +166,7 @@ func RunHUD(config Settings, uart *machine.UART, led machine.Pin) {
 
 // drawHUD renders the current state to the OLED. Headline goes in the yellow
 // region (rows 0-15); status lines fill the blue region (rows 16-63).
-func drawHUD(display *ssd1306.Device, c color.RGBA, st *hudState) {
+func drawHUD(display *chunkedOLED, c color.RGBA, st *hudState) error {
 	font := &proggy.TinySZ8pt7b
 
 	display.ClearBuffer()
@@ -160,41 +185,7 @@ func drawHUD(display *ssd1306.Device, c color.RGBA, st *hudState) {
 	tinyfont.WriteLine(display, font, 0, 63,
 		"Bat: "+formatVolts(st.battDeci)+" "+strconv.Itoa(int(st.battPct))+"%", c)
 
-	display.Display()
-}
-
-// formatVolts turns deci-volts into e.g. "7.4V" without float formatting.
-func formatVolts(deci uint8) string {
-	return strconv.Itoa(int(deci)/10) + "." + strconv.Itoa(int(deci)%10) + "V"
-}
-
-// animName maps an animation ID to a short label for the HUD. The dispatcher
-// broadcasts logical IDs; the side-specific variants are included for safety.
-func animName(id AnimationID) string {
-	switch id {
-	case Anim_EyeIdle:
-		return "Idle"
-	case Anim_EyeBlink:
-		return "Blink"
-	case Anim_EyeHappy:
-		return "Happy"
-	case Anim_EyeExcited, Anim_EyeExcitedLeft, Anim_EyeExcitedRight:
-		return "Excited"
-	case Anim_EyeStare, Anim_MouthStare, Anim_MouthStareLeft, Anim_MouthStareRight:
-		return "Stare"
-	case Anim_EyeFlushed, Anim_MouthFlushed, Anim_MouthFlushedLeft, Anim_MouthFlushedRight:
-		return "Flushed"
-	case Anim_MouthIdle, Anim_MouthIdleLeft, Anim_MouthIdleRight:
-		return "Idle"
-	case Anim_MouthYap1, Anim_MouthYap1Left, Anim_MouthYap1Right:
-		return "Yap1"
-	case Anim_MouthYap2, Anim_MouthYap2Left, Anim_MouthYap2Right:
-		return "Yap2"
-	case Anim_MouthYap3, Anim_MouthYap3Left, Anim_MouthYap3Right:
-		return "Yap3"
-	default:
-		return "?"
-	}
+	return display.Display()
 }
 
 // displayInsigniaOnce locates the "insignia" animation loaded by main.go,
@@ -246,22 +237,4 @@ func writeInsigniaStrip(pin machine.Pin, buf []uint32, pixels int) {
 	strip.EnableDMA(true)
 	strip.WriteRaw(buf)
 	fmt.Printf("[%d] [HUD] insignia rendered: %d pixels on GP%d\n", Ts(), pixels, pin)
-}
-
-// expressionSet reconstructs which expression "set" is active from the eye anim.
-// The HUD can't see the dispatcher's internal eyeMode, so it infers it. Stare and
-// Flushed are full eye+mouth sets; Happy/Excited are eye-only modes.
-func expressionSet(eye AnimationID) string {
-	switch eye {
-	case Anim_EyeHappy:
-		return "Happy"
-	case Anim_EyeExcited, Anim_EyeExcitedLeft, Anim_EyeExcitedRight:
-		return "Excited"
-	case Anim_EyeStare:
-		return "Stare"
-	case Anim_EyeFlushed:
-		return "Flushed"
-	default:
-		return "None"
-	}
 }

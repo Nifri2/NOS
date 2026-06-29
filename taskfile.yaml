@@ -226,7 +226,15 @@ tasks:
   test:
     desc: "Run unit tests (pure-Go subset of cmd package)"
     cmds:
-      - go test ./cmd/
+      # - go test ./cmd/
+      - gotestsum --format dots -- -count=1 ./cmd/
+
+  test:pretty:
+    desc: "Run unit tests with colorized per-test output (needs gotestsum)"
+    cmds:
+      # gotestsum wraps `go test`; --format testname prints a PASS/FAIL line per
+      # test plus a summary. -count=1 disables the test cache so every run is real.
+      - gotestsum --format testname -- -count=1 ./cmd/
 
   generate_commit:
     desc: "Generate commit message with Claude, commit and push"

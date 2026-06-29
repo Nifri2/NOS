@@ -5,7 +5,10 @@ import (
 	"fmt"
 )
 
-// CRC-8/MAXIM lookup table (poly 0x31, init 0x00, no reflect, no xor-out)
+// CRC-8 lookup table (poly 0x31, init 0x00, no reflection, no xor-out).
+// NOTE: this is NOT CRC-8/MAXIM — MAXIM is a reflected variant. This is the
+// plain MSB-first CRC-8 over poly 0x31. Both sides of the bus share this code,
+// so it is internally consistent; only external interop needs the exact spec.
 var crc8Table = [256]byte{
 	0x00, 0x31, 0x62, 0x53, 0xC4, 0xF5, 0xA6, 0x97,
 	0xB9, 0x88, 0xDB, 0xEA, 0x7D, 0x4C, 0x1F, 0x2E,
@@ -41,7 +44,7 @@ var crc8Table = [256]byte{
 	0x3B, 0x0A, 0x59, 0x68, 0xFF, 0xCE, 0x9D, 0xAC,
 }
 
-// Crc8 computes CRC-8/MAXIM checksum
+// Crc8 computes the CRC-8 checksum (poly 0x31, init 0x00, no reflection)
 func Crc8(data []byte) byte {
 	var crc byte = 0x00
 	for _, b := range data {
@@ -50,13 +53,25 @@ func Crc8(data []byte) byte {
 	return crc
 }
 
-// Crc8Bytes4 computes CRC-8/MAXIM checksum for exactly 4 bytes (zero allocation)
+// Crc8Bytes4 computes the CRC-8 checksum for exactly 4 bytes (zero allocation)
 func Crc8Bytes4(a, b, c, d byte) byte {
 	crc := crc8Table[a]
 	crc = crc8Table[crc^b]
 	crc = crc8Table[crc^c]
 	crc = crc8Table[crc^d]
 	return crc
+}
+
+// EncodeRadioPress encodes a radio button sequence into a control code.
+// A single press (p2 == -1) maps directly to its button index (0-3).
+// A double-press encodes as 4 + (first<<2 | second). Lives here (untagged)
+// so the dispatcher's tinygo radio loop and the unit tests share one source
+// of truth for the wire encoding.
+func EncodeRadioPress(p1, p2 int) byte {
+	if p2 == -1 {
+		return byte(p1)
+	}
+	return byte(4 + ((p1 << 2) | p2))
 }
 
 func LoadAnimation(data []byte, width, height int, name string) (*Animation, error) {

@@ -2,13 +2,6 @@ package cmd
 
 import "testing"
 
-func radioEncode(p1, p2 int) byte {
-	if p2 == -1 {
-		return byte(p1)
-	}
-	return byte(4 + ((p1 << 2) | p2))
-}
-
 func TestRadioEncoding(t *testing.T) {
 	cases := []struct {
 		p1, p2 int
@@ -28,9 +21,9 @@ func TestRadioEncoding(t *testing.T) {
 		{3, 0, 0x10, "D+A"},
 	}
 	for _, c := range cases {
-		got := radioEncode(c.p1, c.p2)
+		got := EncodeRadioPress(c.p1, c.p2)
 		if got != c.want {
-			t.Errorf("%s: radioEncode(%d,%d) = 0x%02X, want 0x%02X", c.label, c.p1, c.p2, got, c.want)
+			t.Errorf("%s: EncodeRadioPress(%d,%d) = 0x%02X, want 0x%02X", c.label, c.p1, c.p2, got, c.want)
 		}
 	}
 }
